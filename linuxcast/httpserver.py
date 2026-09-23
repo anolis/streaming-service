@@ -155,5 +155,10 @@ class MediaServer:
         return self.url(f"f/{token}/{quote(path.name)}")
 
     def close(self):
-        self._httpd.shutdown()
+        # shutdown() waits for serve_forever to notice; after a receiver was
+        # taken over by another sender this was seen to hang indefinitely (not
+        # reproducible locally), so bound it. The loop thread is a daemon anyway.
+        stopper = threading.Thread(target=self._httpd.shutdown, daemon=True)
+        stopper.start()
+        stopper.join(2)
         self._httpd.server_close()

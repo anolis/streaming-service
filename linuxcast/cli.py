@@ -105,7 +105,10 @@ def run_session(args, kind: str, what: str, start):
             s.close()
         if s.last_error:
             raise Failure(f"Cast to {device.name} ended: {s.last_error}")
-        notify(args, f"Stopped casting to {device.name}")
+        note = getattr(s, "end_note", None)
+        if note:
+            print(f"{device.name}: {note}", file=sys.stderr)
+        notify(args, f"Stopped casting to {device.name}", note or "")
     finally:
         session.clear()
 

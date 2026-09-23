@@ -77,6 +77,7 @@ class ChromecastBackend(Backend):
             mc.play_media(url, content_type, title=title,
                           stream_type="LIVE" if live else "BUFFERED", media_info=media_info)
             mc.block_until_active(timeout=15)
+            session.bind(mc.status)
         except BaseException:
             # Stopped mid-connect: don't leave the receiver on a dead stream.
             cast.quit_app()
@@ -164,6 +165,16 @@ class CastSession(Session, MediaStatusListener):
         self.last_error = None
         self._live_edge = None  # callable -> seconds at the live edge, for logging lag
         self._last_state = None
+        self._media_session = None  # ours, once the load is active
+        self.end_note = None  # why the receiver ended a cast we didn't stop
+
+    def bind(self, status):
+        """Only our own media session's status counts from here on. Until then the
+        receiver may still report on whatever it played before (e.g. BUFFERING then
+        IDLE as the old media is replaced), which must not end our cast."""
+        self._media_session = status.media_session_id
+        if status.player_state in ("PLAYING", "BUFFERING"):
+            self._seen_playing = True
 
     def watch_live(self, live_edge):
         self._live_edge = live_edge
@@ -180,11 +191,20 @@ class CastSession(Session, MediaStatusListener):
             lag = self._lag(status)
             why = f" [{status.idle_reason}]" if status.idle_reason else ""
             _log(f"receiver {status.player_state}{why}" + (f" (lag {lag:.1f}s)" if lag is not None else ""))
+        if self._media_session is None:
+            return
+        if status.media_session_id not in (None, self._media_session):
+            self.end_note = "another device started casting to it"
+            self._done.set()
+            return
         if status.player_state in ("PLAYING", "BUFFERING"):
             self._seen_playing = True
         elif status.player_state == "IDLE" and self._seen_playing:
             if status.idle_reason == "ERROR":
                 self.last_error = "receiver reported a playback error"
+            elif self._live_edge:
+                # A live mirror never finishes by itself.
+                self.end_note = "stopped from the TV or another device"
             self._done.set()
 
     def load_media_failed(self, queue_item_id, error_code):
