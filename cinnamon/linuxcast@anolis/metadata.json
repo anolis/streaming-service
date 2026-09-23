@@ -1,0 +1,8 @@
+{
+    "uuid": "linuxcast@anolis",
+    "name": "Cast",
+    "description": "Cast your screen or media to Chromecast and other network displays (linuxcast)",
+    "icon": "video-display",
+    "max-instances": 1,
+    "version": "0.1.0"
+}

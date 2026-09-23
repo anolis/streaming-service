@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Cast
+Comment=Cast your screen or media to Chromecast and other network displays
+Icon=video-display
+Exec=@TRAY@
+OnlyShowIn=XFCE;
+X-GNOME-Autostart-enabled=true

@@ -19,6 +19,14 @@ from pathlib import Path
 from linuxcast.base import CaptureOptions
 
 PLAYLIST = "stream.m3u8"
+SEGMENT_S = 1        # short segments keep latency down...
+LIVE_WINDOW = 30     # ...and a long window means a stalled receiver falls behind
+                     # instead of off the end of the playlist
+SEGMENT_TYPE = "fmp4"  # fmp4 | mpegts
+# Where the receiver starts, relative to live. Left to itself the Chromecast may
+# start ~3 segments back and, since it doesn't fetch ahead, then flips between
+# PLAYING and BUFFERING at every network hiccup.
+LIVE_START_OFFSET_S = 8
 OUT_W, OUT_H = 1920, 1080  # receivers get a fixed 16:9 1080p frame
 
 
@@ -66,22 +74,24 @@ def _encoder_works(args: tuple[str, ...]) -> bool:
 
 
 def video_encoder_args(choice: str, fps: int, bitrate: str) -> list[str]:
-    gop = str(fps)  # keyframe every second so each 1s segment is independently decodable
+    """bitrate is a cap: quality-targeted VBR, so a static desktop costs ~1 Mbit/s
+    instead of CBR padding every second out to the full rate."""
+    gop = str(int(fps * SEGMENT_S))  # keyframe per segment so each is independently decodable
+    cap = ["-maxrate", bitrate, "-bufsize", bitrate]
     candidates = {
         "nvenc": ["-c:v", "h264_nvenc", "-preset", "p2", "-tune", "ll", "-zerolatency", "1",
-                  "-rc", "cbr", "-profile:v", "high", "-bf", "0"],
+                  "-rc", "vbr", "-cq", "23", "-b:v", "0", *cap, "-profile:v", "high", "-bf", "0"],
         "vaapi": ["-vaapi_device", "/dev/dri/renderD128", "-c:v", "h264_vaapi",
-                  "-profile:v", "high", "-bf", "0"],
+                  "-rc_mode", "VBR", "-b:v", bitrate, *cap, "-profile:v", "high", "-bf", "0"],
         "x264": ["-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency",
-                 "-profile:v", "high", "-pix_fmt", "yuv420p"],
+                 "-crf", "23", *cap, "-profile:v", "high", "-pix_fmt", "yuv420p"],
     }
     order = [choice] if choice != "auto" else ["nvenc", "vaapi", "x264"]
     for name in order:
         args = candidates[name]
         probe = args + (["-vf", "format=nv12,hwupload"] if name == "vaapi" else [])
         if name == "x264" or _encoder_works(tuple(probe)):
-            rate = ["-b:v", bitrate, "-maxrate", bitrate, "-bufsize", bitrate]
-            return args + rate + ["-g", gop, "-keyint_min", gop, "-sc_threshold", "0"]
+            return args + ["-g", gop, "-keyint_min", gop, "-sc_threshold", "0"]
     raise RuntimeError(f"encoder {choice!r} is not usable on this machine")
 
 
@@ -95,12 +105,14 @@ def _scale_filter(hw_vaapi: bool) -> str:
 def _hls_output(outdir: Path, live: bool) -> list[str]:
     # Live: rolling window. File: growing EVENT playlist that gets ENDLIST at EOF.
     flags = "independent_segments+omit_endlist+delete_segments" if live else "independent_segments"
+    ext = "m4s" if SEGMENT_TYPE == "fmp4" else "ts"
     return [
-        "-f", "hls", "-hls_time", "1",
-        "-hls_list_size", "6" if live else "0",
+        "-hls_segment_type", SEGMENT_TYPE,
+        "-f", "hls", "-hls_time", str(SEGMENT_S),
+        "-hls_list_size", str(LIVE_WINDOW) if live else "0",
         "-hls_playlist_type", "event" if not live else "",
         "-hls_flags", flags,
-        "-hls_segment_filename", str(outdir / "seg%05d.ts"),
+        "-hls_segment_filename", str(outdir / f"seg%05d.{ext}"),
         str(outdir / PLAYLIST),
     ]
 
@@ -172,6 +184,17 @@ def needs_transcode(src: str) -> bool:
     if fmt in {"mp3", "flac", "ogg", "wav"} and not v:
         return False
     return True
+
+
+def live_edge(outdir: Path) -> float | None:
+    """Media time (s) at the end of the newest segment in the playlist."""
+    try:
+        txt = (outdir / PLAYLIST).read_text()
+    except FileNotFoundError:
+        return None
+    m = re.search(r"#EXT-X-MEDIA-SEQUENCE:(\d+)", txt)
+    listed = sum(float(d) for d in re.findall(r"#EXTINF:([\d.]+)", txt))
+    return (int(m[1]) if m else 0) * SEGMENT_S + listed
 
 
 class HlsProcess:

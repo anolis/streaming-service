@@ -1,0 +1,9 @@
+[Nemo Action]
+Active=true
+Name=Cast to device
+Comment=Play %N on a Chromecast or other cast device
+Exec=@LINUXCAST@ play --gui --notify %F
+Icon-Name=video-display-symbolic
+Selection=s
+Extensions=mp4;mkv;webm;mov;avi;m4v;ts;mpg;mpeg;wmv;flv;mp3;flac;ogg;opus;wav;m4a;aac;
+Quote=double

@@ -42,6 +42,7 @@ class _Collector(ServiceListener):
 
 class AirPlayBackend(Backend):
     name = "airplay"
+    can_cast = False
 
     def available(self):
         if Zeroconf is None:

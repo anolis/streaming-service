@@ -1,0 +1,364 @@
+#!/usr/bin/python3
+"""Cast tray icon for Xfce (or any panel with StatusNotifier/AppIndicator support).
+
+The Xfce counterpart of the Cinnamon applet: it shells out to the `linuxcast`
+CLI and reads $XDG_RUNTIME_DIR/linuxcast/session.json for the active cast, so
+casts started from anywhere show up here. Runs on the system Python because it
+needs PyGObject; it never imports the linuxcast package itself.
+
+    linuxcast-tray           start the tray icon (single instance)
+    linuxcast-tray --menu    show the Win+K style flyout (bound to Super+K)
+"""
+
+import json
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+import gi
+
+gi.require_version("Gtk", "3.0")
+gi.require_version("AyatanaAppIndicator3", "0.1")
+from gi.repository import AyatanaAppIndicator3 as AppIndicator  # noqa: E402
+from gi.repository import Gdk, Gio, GLib, Gtk  # noqa: E402
+
+APP_ID = "io.github.anolis.linuxcast.tray"
+RUNTIME = Path(os.environ.get("XDG_RUNTIME_DIR") or f"/tmp/linuxcast-{os.getuid()}") / "linuxcast"
+STATE_FILE = RUNTIME / "session.json"
+LOG_FILE = RUNTIME / "tray.log"
+PREFS_FILE = Path(GLib.get_user_config_dir()) / "linuxcast" / "tray.json"
+DEVICE_TTL_SECONDS = 60
+ICON_IDLE = "video-display-symbolic"
+ICON_ACTIVE = "screen-shared-symbolic"
+# Icon themes disagree on a TV icon, so fall back to a plain display.
+DEVICE_ICONS = ["tv-symbolic", "video-display-tv-symbolic", "video-display-symbolic"]
+MEDIA_GLOBS = "*.mp4 *.mkv *.webm *.mov *.avi *.m4v *.ts *.mp3 *.flac *.ogg *.wav *.m4a"
+
+
+def linuxcast_bin() -> str | None:
+    local = Path.home() / ".local/bin/linuxcast"
+    return str(local) if os.access(local, os.X_OK) else shutil.which("linuxcast")
+
+
+def read_state() -> dict | None:
+    try:
+        state = json.loads(STATE_FILE.read_text())
+    except (FileNotFoundError, ValueError):
+        return None
+    return state if Path(f"/proc/{state.get('pid')}").exists() else None
+
+
+class Prefs:
+    def __init__(self):
+        try:
+            data = json.loads(PREFS_FILE.read_text())
+        except (FileNotFoundError, ValueError):
+            data = {}
+        self.monitor: str = data.get("monitor", "")
+        self.audio: bool = data.get("audio", True)
+
+    def save(self):
+        PREFS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        PREFS_FILE.write_text(json.dumps({"monitor": self.monitor, "audio": self.audio}))
+
+
+class CastTray(Gtk.Application):
+    def __init__(self):
+        super().__init__(application_id=APP_ID,
+                         flags=Gio.ApplicationFlags.HANDLES_COMMAND_LINE)
+        self.prefs = Prefs()
+        self.devices: list[dict] = []
+        self.devices_at = 0.0
+        self.scanning = False
+        self.monitors: list[dict] = []
+        self.state: dict | None = None
+        self._state_key = ""
+        self.indicator = None
+        self.flyout = None
+
+    # ---- Gtk.Application ------------------------------------------------------
+
+    def do_command_line(self, cmdline):
+        args = cmdline.get_arguments()[1:]
+        if self.indicator is None:
+            self._start_tray()
+        if "--menu" in args:
+            self.show_flyout()
+        return 0
+
+    def _start_tray(self):
+        self.hold()  # no windows; keep running for the indicator
+        self.indicator = AppIndicator.Indicator.new(
+            "linuxcast", ICON_IDLE, AppIndicator.IndicatorCategory.APPLICATION_STATUS)
+        self.indicator.set_title("Cast")
+        self.indicator.set_status(AppIndicator.IndicatorStatus.ACTIVE)
+        self._poll_state()
+        GLib.timeout_add_seconds(2, self._poll_state)
+        GLib.timeout_add_seconds(DEVICE_TTL_SECONDS, lambda: self.refresh_devices(True) or True)
+        self.load_monitors()
+        self.refresh_devices(True)
+        self.rebuild()
+
+    # ---- talking to the CLI ------------------------------------------------------
+
+    def query(self, args: list[str], callback):
+        bin_ = linuxcast_bin()
+        if not bin_:
+            self.error("linuxcast was not found in ~/.local/bin or PATH")
+            return
+        proc = Gio.Subprocess.new([bin_, *args], Gio.SubprocessFlags.STDOUT_PIPE
+                                  | Gio.SubprocessFlags.STDERR_PIPE)
+
+        def done(p, res):
+            ok, out, err = p.communicate_utf8_finish(res)
+            if p.get_exit_status() != 0:
+                print(f"linuxcast {' '.join(args)} failed: {err}", file=sys.stderr)
+                out = None
+            callback(out)
+
+        proc.communicate_utf8_async(None, None, done)
+
+    def launch(self, args: list[str]):
+        """Start a cast in its own session so it outlives the tray."""
+        bin_ = linuxcast_bin()
+        if not bin_:
+            self.error("linuxcast was not found in ~/.local/bin or PATH")
+            return
+        RUNTIME.mkdir(parents=True, exist_ok=True)
+        with open(LOG_FILE, "a") as log:
+            subprocess.Popen([bin_, *args, "--notify"], stdin=subprocess.DEVNULL,
+                             stdout=log, stderr=log, start_new_session=True)
+        GLib.timeout_add(400, lambda: self._poll_state() and False)
+
+    def error(self, msg: str):
+        subprocess.run(["notify-send", "-u", "critical", "-i", ICON_IDLE, "Cast", msg], check=False)
+
+    def refresh_devices(self, force=False):
+        fresh = GLib.get_monotonic_time() / 1e6 - self.devices_at < DEVICE_TTL_SECONDS
+        if self.scanning or (fresh and not force):
+            return
+        self.scanning = True
+        self.rebuild()
+
+        def done(out):
+            self.scanning = False
+            if out is not None:
+                try:
+                    self.devices = [d for d in json.loads(out) if d.get("castable")]
+                    self.devices_at = GLib.get_monotonic_time() / 1e6
+                except ValueError:
+                    pass
+            self.rebuild()
+
+        self.query(["devices", "--json", "-t", "3"], done)
+
+    def load_monitors(self):
+        def done(out):
+            if out:
+                self.monitors = json.loads(out)
+                self.rebuild()
+        self.query(["monitors", "--json"], done)
+
+    def _poll_state(self):
+        state = read_state()
+        key = json.dumps(state, sort_keys=True) if state else ""
+        if key != self._state_key:
+            self._state_key = key
+            self.state = state
+            self.rebuild()
+        return True
+
+    # ---- actions ---------------------------------------------------------------------
+
+    def mirror_to(self, device: dict):
+        args = ["mirror", "--target", json.dumps(device)]
+        if self.prefs.monitor:
+            args += ["-m", self.prefs.monitor]
+        if not self.prefs.audio:
+            args.append("--no-audio")
+        self.launch(args)
+
+    def cast_file(self):
+        dialog = Gtk.FileChooserNative.new("Cast a media file", None,
+                                           Gtk.FileChooserAction.OPEN, "_Cast", "_Cancel")
+        media = Gtk.FileFilter()
+        media.set_name("Media")
+        for glob in MEDIA_GLOBS.split():
+            media.add_pattern(glob)
+        dialog.add_filter(media)
+        if dialog.run() == Gtk.ResponseType.ACCEPT:
+            args = ["play", dialog.get_filename()]
+            if len(self.devices) == 1:
+                args += ["--target", json.dumps(self.devices[0])]
+            else:
+                args.append("--gui")
+            self.launch(args)
+        dialog.destroy()
+
+    def stop(self):
+        self.query(["stop"], lambda _out: self._poll_state())
+
+    def set_monitor(self, name: str):
+        self.prefs.monitor = name
+        self.prefs.save()
+        self.rebuild()
+
+    def set_audio(self, on: bool):
+        self.prefs.audio = on
+        self.prefs.save()
+
+    # ---- UI ------------------------------------------------------------------------------
+
+    def status_text(self) -> str | None:
+        s = self.state
+        if not s:
+            return None
+        verb = {"searching": "Looking for", "connecting": "Connecting to"}.get(s["status"], "Casting to")
+        return f"{verb} {s['device']['name']}"
+
+    def monitor_label(self) -> str:
+        if self.prefs.monitor:
+            return self.prefs.monitor
+        primary = next((m for m in self.monitors if m["primary"]), None)
+        return f"Primary ({primary['name']})" if primary else "Primary"
+
+    def rebuild(self):
+        if self.indicator is None:
+            return
+        self.indicator.set_icon_full(ICON_ACTIVE if self.state else ICON_IDLE, "Cast")
+        self.indicator.set_title(self.status_text() or "Cast")
+        self.indicator.set_menu(self._build_menu())
+        if self.flyout:
+            self.flyout.refresh()
+
+    def _build_menu(self) -> Gtk.Menu:
+        menu = Gtk.Menu()
+
+        def item(label, cb=None, sensitive=True):
+            mi = Gtk.MenuItem(label=label)
+            mi.set_sensitive(sensitive)
+            if cb:
+                mi.connect("activate", lambda _w: cb())
+            menu.append(mi)
+            return mi
+
+        if self.state:
+            item(self.status_text(), sensitive=False)
+            item(f"    {self.state['what']}", sensitive=False)
+            item("Stop casting", self.stop)
+            menu.append(Gtk.SeparatorMenuItem())
+
+        item("Mirror screen to:", sensitive=False)
+        active_id = self.state["device"]["id"] if self.state else None
+        for d in self.devices:
+            label = f"    {d['name']}" + ("  (active)" if d["id"] == active_id else "")
+            item(label, lambda d=d: self.mirror_to(d))
+        if self.scanning:
+            item("    Searching…", sensitive=False)
+        elif not self.devices:
+            item("    No devices found", sensitive=False)
+        menu.append(Gtk.SeparatorMenuItem())
+
+        screens = Gtk.MenuItem(label=f"Screen: {self.monitor_label()}")
+        sub = Gtk.Menu()
+        group = None
+        for name, label in [("", "Primary")] + [
+                (m["name"], f"{m['name']}  {m['width']}×{m['height']}") for m in self.monitors]:
+            ri = Gtk.RadioMenuItem.new_with_label_from_widget(group, label)
+            group = group or ri
+            ri.set_active(self.prefs.monitor == name)
+            ri.connect("toggled", lambda w, n=name: w.get_active() and self.set_monitor(n))
+            sub.append(ri)
+        screens.set_submenu(sub)
+        menu.append(screens)
+
+        audio = Gtk.CheckMenuItem(label="Include desktop audio")
+        audio.set_active(self.prefs.audio)
+        audio.connect("toggled", lambda w: self.set_audio(w.get_active()))
+        menu.append(audio)
+
+        menu.append(Gtk.SeparatorMenuItem())
+        item("Cast a media file…", self.cast_file)
+        item("Refresh devices", lambda: self.refresh_devices(True))
+        item("Quit", self.quit)
+        menu.show_all()
+        return menu
+
+    def show_flyout(self):
+        if self.flyout is None:
+            self.flyout = Flyout(self)
+        self.refresh_devices(False)
+        self.flyout.present_at_pointer()
+
+
+class Flyout(Gtk.Window):
+    """Win+K style panel: device buttons, stop, dismissed by Esc or clicking away."""
+
+    def __init__(self, app: CastTray):
+        super().__init__(title="Cast", decorated=False, resizable=False, skip_taskbar_hint=True,
+                         skip_pager_hint=True, type_hint=Gdk.WindowTypeHint.DIALOG)
+        self.app = app
+        self.set_keep_above(True)
+        self.set_border_width(12)
+        self.box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        self.box.set_size_request(280, -1)
+        self.add(self.box)
+        self.connect("key-press-event", self._on_key)
+        self.connect("focus-out-event", lambda *_: self.hide())
+        self.connect("delete-event", lambda *_: self.hide() or True)
+        self.refresh()
+
+    def _on_key(self, _w, event):
+        if event.keyval == Gdk.KEY_Escape:
+            self.hide()
+
+    def _button(self, label, cb, icons=None):
+        b = Gtk.Button(label=label)
+        if icons:
+            gicon = Gio.ThemedIcon.new_from_names(icons)
+            b.set_image(Gtk.Image.new_from_gicon(gicon, Gtk.IconSize.LARGE_TOOLBAR))
+            b.set_always_show_image(True)
+        b.connect("clicked", lambda _b: (self.hide(), cb()))
+        self.box.pack_start(b, False, False, 0)
+
+    def _label(self, text, bold=False):
+        lbl = Gtk.Label(xalign=0)
+        lbl.set_markup(f"<b>{GLib.markup_escape_text(text)}</b>" if bold
+                       else GLib.markup_escape_text(text))
+        self.box.pack_start(lbl, False, False, 0)
+
+    def refresh(self):
+        for child in self.box.get_children():
+            self.box.remove(child)
+        app = self.app
+        if app.state:
+            self._label(app.status_text(), bold=True)
+            self._label(app.state["what"])
+            self._button("Stop casting", app.stop, ["media-playback-stop-symbolic"])
+            self.box.pack_start(Gtk.Separator(), False, False, 4)
+        self._label("Cast to a device", bold=True)
+        for d in app.devices:
+            self._button(d["name"], lambda d=d: app.mirror_to(d), DEVICE_ICONS)
+        if app.scanning:
+            self._label("Searching…")
+        elif not app.devices:
+            self._label("No devices found")
+        self._label(f"Screen: {app.monitor_label()}  ·  audio {'on' if app.prefs.audio else 'off'}")
+        self.box.show_all()  # show new children without popping the window up
+
+    def present_at_pointer(self):
+        display = Gdk.Display.get_default()
+        _screen, x, y = display.get_default_seat().get_pointer().get_position()
+        self.refresh()
+        self.show_all()
+        w, h = self.get_size()
+        geo = display.get_monitor_at_point(x, y).get_geometry()
+        self.move(min(max(x - w // 2, geo.x), geo.x + geo.width - w),
+                  min(max(y - h // 2, geo.y), geo.y + geo.height - h))
+        self.present_with_time(Gtk.get_current_event_time())
+
+
+if __name__ == "__main__":
+    sys.exit(CastTray().run(sys.argv))

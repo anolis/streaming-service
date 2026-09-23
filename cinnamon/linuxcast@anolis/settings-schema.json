@@ -1,0 +1,22 @@
+{
+    "hotkey": {
+        "type": "keybinding",
+        "default": "<Super>k",
+        "description": "Open the Cast menu"
+    },
+    "include-audio": {
+        "type": "switch",
+        "default": true,
+        "description": "Include desktop audio when mirroring"
+    },
+    "monitor": {
+        "type": "entry",
+        "default": "",
+        "description": "Monitor to mirror (xrandr output name, empty = primary)"
+    },
+    "linuxcast-path": {
+        "type": "entry",
+        "default": "~/.local/bin/linuxcast",
+        "description": "Path to the linuxcast command"
+    }
+}

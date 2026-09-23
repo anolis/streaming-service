@@ -35,6 +35,7 @@ class BackendUnavailable(RuntimeError):
 
 class Backend(abc.ABC):
     name: str = ""
+    can_cast: bool = True  # False for discovery-only backends
 
     @abc.abstractmethod
     def available(self) -> tuple[bool, str]:
@@ -74,6 +75,6 @@ class CaptureOptions:
     monitor: str | None = None      # xrandr output name, None = primary
     audio: bool = True              # capture desktop audio (default sink monitor)
     fps: int = 30
-    bitrate: str = "6M"
+    bitrate: str = "8M"             # cap; actual rate follows screen complexity
     encoder: str = "auto"           # auto | nvenc | vaapi | x264
     workdir: Path | None = None

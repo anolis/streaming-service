@@ -31,6 +31,7 @@ def local_ip_for(remote_host: str) -> str:
 class _Handler(SimpleHTTPRequestHandler):
     # Set per-server via functools-free subclassing in MediaServer.
     files: dict[str, Path] = {}
+    playlist_header: str = ""  # extra tags inserted after #EXTM3U in served playlists
 
     def log_message(self, fmt, *args):  # keep the terminal quiet
         if os.environ.get("LINUXCAST_DEBUG"):
@@ -40,8 +41,8 @@ class _Handler(SimpleHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Headers", "*")
         self.send_header("Access-Control-Expose-Headers", "Content-Length, Content-Range")
-        if self.path.endswith(".m3u8"):
-            self.send_header("Cache-Control", "no-cache")
+        if self._is_playlist():
+            self.send_header("Cache-Control", "no-store")
         super().end_headers()
 
     def do_OPTIONS(self):
@@ -55,7 +56,19 @@ class _Handler(SimpleHTTPRequestHandler):
             return str(self.files[parts[2]])
         return super().translate_path(path)
 
+    def _is_playlist(self):
+        return self.path.split("?", 1)[0].endswith(".m3u8")
+
     def do_GET(self):
+        if self._is_playlist():
+            # Live playlists change every second, but Last-Modified only has
+            # 1-second resolution: honouring If-Modified-Since can answer "304
+            # not modified" for a playlist that just gained a segment, and the
+            # receiver starves at the live edge ("buffering" forever).
+            del self.headers["If-Modified-Since"]
+            del self.headers["If-None-Match"]
+            if self.playlist_header:
+                return self._send_playlist()
         rng = self.headers.get("Range")
         path = Path(self.translate_path(self.path))
         if not rng or not path.is_file():
@@ -98,6 +111,20 @@ class _Handler(SimpleHTTPRequestHandler):
                 pass  # receivers routinely abort range requests while seeking
 
 
+    def _send_playlist(self):
+        try:
+            text = Path(self.translate_path(self.path)).read_text()
+        except FileNotFoundError:
+            self.send_error(404)
+            return
+        body = text.replace("#EXTM3U\n", f"#EXTM3U\n{self.playlist_header}\n", 1).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/x-mpegURL")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
 class MediaServer:
     """Serves `root` (for HLS output) plus individually registered files."""
 
@@ -118,6 +145,9 @@ class MediaServer:
 
     def url(self, rel: str) -> str:
         return f"http://{self.ip}:{self.port}/{rel.lstrip('/')}"
+
+    def set_playlist_header(self, tags: str):
+        self._handler.playlist_header = tags
 
     def add_file(self, path: Path) -> str:
         token = str(len(self._handler.files))

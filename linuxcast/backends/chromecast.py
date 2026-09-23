@@ -2,14 +2,15 @@
 
 Chromecast can't receive arbitrary screen-mirroring streams (Chrome's tab/desktop
 mirroring uses a private Cast Streaming app), so mirroring works by encoding the
-screen to low-latency HLS and pointing the Default Media Receiver at it. Expect
-~3-5 s of latency: fine for presentations/video, not for games.
+screen to HLS and pointing the Default Media Receiver at it. Expect ~10 s of
+latency (see LIVE_START_OFFSET_S): fine for video, not for games.
 """
 
 from __future__ import annotations
 
 import mimetypes
 import shutil
+import sys
 import tempfile
 import threading
 import time
@@ -67,16 +68,27 @@ class ChromecastBackend(Backend):
         mc = cast.media_controller
         session = CastSession(cast, cleanup)
         mc.register_status_listener(session)
-        media_info = {"hlsSegmentFormat": "ts", "hlsVideoSegmentFormat": "mpeg2_ts"} \
-            if content_type == "application/x-mpegURL" else None
-        mc.play_media(url, content_type, title=title,
-                      stream_type="LIVE" if live else "BUFFERED", media_info=media_info)
-        mc.block_until_active(timeout=15)
+        media_info = None
+        if content_type == "application/x-mpegURL":
+            fmt = "fmp4" if capture.SEGMENT_TYPE == "fmp4" else "ts"
+            media_info = {"hlsSegmentFormat": fmt,
+                          "hlsVideoSegmentFormat": "fmp4" if fmt == "fmp4" else "mpeg2_ts"}
+        try:
+            mc.play_media(url, content_type, title=title,
+                          stream_type="LIVE" if live else "BUFFERED", media_info=media_info)
+            mc.block_until_active(timeout=15)
+        except BaseException:
+            # Stopped mid-connect: don't leave the receiver on a dead stream.
+            cast.quit_app()
+            cast.disconnect(timeout=3)
+            raise
         return session
 
     def mirror(self, device, opts: CaptureOptions):
         workdir = Path(opts.workdir or tempfile.mkdtemp(prefix="linuxcast-"))
         server = MediaServer(workdir, local_ip_for(device.host)).start()
+        server.set_playlist_header(
+            f"#EXT-X-START:TIME-OFFSET=-{capture.LIVE_START_OFFSET_S},PRECISE=YES")
         hls = capture.HlsProcess(capture.screen_command(opts, workdir), workdir)
 
         def cleanup():
@@ -85,13 +97,16 @@ class ChromecastBackend(Backend):
             shutil.rmtree(workdir, ignore_errors=True)
 
         try:
-            hls.wait_ready()
+            # The start offset only works once that much stream exists.
+            hls.wait_ready(segments=capture.LIVE_START_OFFSET_S + 2,
+                           timeout=capture.LIVE_START_OFFSET_S + 20)
             s = self._start(device, server.url(capture.PLAYLIST), "application/x-mpegURL",
                             "Linux screen", live=True, cleanup=cleanup)
         except BaseException:
             cleanup()
             raise
         s.child = hls.proc
+        s.watch_live(lambda: capture.live_edge(workdir))
         return s
 
     def play(self, device, source):
@@ -135,6 +150,10 @@ class ChromecastBackend(Backend):
         cast.disconnect(timeout=3)
 
 
+def _log(msg):
+    print(f"[{time.strftime('%H:%M:%S')}] {msg}", file=sys.stderr, flush=True)
+
+
 class CastSession(Session, MediaStatusListener):
     def __init__(self, cast, cleanup):
         self.cast = cast
@@ -143,9 +162,24 @@ class CastSession(Session, MediaStatusListener):
         self._seen_playing = False
         self.child = None  # ffmpeg process, if any
         self.last_error = None
+        self._live_edge = None  # callable -> seconds at the live edge, for logging lag
+        self._last_state = None
+
+    def watch_live(self, live_edge):
+        self._live_edge = live_edge
+
+    def _lag(self, status) -> float | None:
+        edge = self._live_edge() if self._live_edge else None
+        pos = status.adjusted_current_time if status else None
+        return None if edge is None or pos is None else edge - pos
 
     # MediaStatusListener
     def new_media_status(self, status):
+        if status.player_state != self._last_state:
+            self._last_state = status.player_state
+            lag = self._lag(status)
+            why = f" [{status.idle_reason}]" if status.idle_reason else ""
+            _log(f"receiver {status.player_state}{why}" + (f" (lag {lag:.1f}s)" if lag is not None else ""))
         if status.player_state in ("PLAYING", "BUFFERING"):
             self._seen_playing = True
         elif status.player_state == "IDLE" and self._seen_playing:
