@@ -56,13 +56,17 @@ def choose_device(args) -> Device:
         fields = json.loads(args.target)
         fields.pop("castable", None)
         return Device(**fields)
-    devices = discover_all(args.backend and [args.backend], args.timeout)
-    devices = [d for d in devices if BACKENDS[d.backend].can_cast]
-    if args.device:
+    def find(timeout):
+        devices = discover_all(args.backend and [args.backend], timeout)
+        devices = [d for d in devices if BACKENDS[d.backend].can_cast]
+        if not args.device:
+            return devices, devices
         q = args.device.lower()
-        matches = [d for d in devices if q in d.name.lower() or q == d.id or q == d.host]
-    else:
-        matches = devices
+        return devices, [d for d in devices if q in d.name.lower() or q == d.id or q == d.host]
+
+    devices, matches = find(args.timeout)
+    if not matches:  # mDNS answers get lost on busy Wi-Fi; look once more, longer
+        devices, matches = find(args.timeout * 2)
     if not matches:
         raise Failure(f"No matching cast device found ({len(devices)} discovered)")
     if len(matches) == 1:
