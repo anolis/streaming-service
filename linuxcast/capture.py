@@ -237,12 +237,18 @@ class HlsProcess:
         raise RuntimeError("timed out waiting for ffmpeg to produce HLS segments")
 
     def stop(self):
-        if self.proc.poll() is None:
-            self.proc.terminate()
-            try:
-                self.proc.wait(5)
-            except subprocess.TimeoutExpired:
-                self.proc.kill()
+        stop_process(self.proc)
+
+
+def stop_process(proc):
+    """Terminate and reap an encoder, including the forced-kill path."""
+    if proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
 
 
 def have(binary: str) -> bool:

@@ -137,6 +137,8 @@ class _Handler(SimpleHTTPRequestHandler):
         parts = path.split("?", 1)[0].split("/")
         if len(parts) >= 3 and parts[1] == "f" and parts[2] in self.files:
             return str(self.files[parts[2]])
+        if self.directory == "":
+            return os.devnull + "/unregistered"
         return super().translate_path(path)
 
     def _is_playlist(self):
@@ -254,11 +256,17 @@ class _QuietServer(ThreadingHTTPServer):
 class MediaServer:
     """Serves `root` (for HLS output) plus individually registered files."""
 
-    def __init__(self, root: Path, bind_ip: str, port: int = 0):
+    def __init__(self, root: Path | None, bind_ip: str, port: int = 0):
         handler = type("Handler", (_Handler,), {"files": {}, "live": {}})
         self._handler = handler
+
+        def make_handler(*args, **kwargs):
+            # SimpleHTTPRequestHandler treats None as cwd; use an explicit
+            # sentinel and translate registered-file-only requests ourselves.
+            return handler(*args, directory=str(root) if root is not None else "", **kwargs)
+
         self._httpd = _QuietServer(
-            (bind_ip, port), lambda *a, **kw: handler(*a, directory=str(root), **kw)
+            (bind_ip, port), make_handler
         )
         self.ip = bind_ip
         self.port = self._httpd.server_address[1]

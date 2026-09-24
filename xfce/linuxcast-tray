@@ -234,7 +234,7 @@ class CastTray(Gtk.Application):
         # something visible changed (a scan finding the same devices doesn't).
         s = self.state
         key = json.dumps([s and [s["status"], s["what"], s["device"]["id"]],
-                          [[d["id"], d["name"], d.get("castable")] for d in self.devices],
+                          [[d["id"], d["name"], d.get("castable"), d.get("unsupported"), d.get("host"), d.get("extra")] for d in self.devices],
                           self.scanning and not self.devices, self.monitors,
                           self.prefs.monitor, self.prefs.audio])
         if key != getattr(self, "_menu_key", None):
@@ -264,7 +264,8 @@ class CastTray(Gtk.Application):
         active_id = self.state["device"]["id"] if self.state else None
         for d in self.devices:
             if not d.get("castable"):
-                item(f"    {d['name']}  ({d['backend']}: not supported yet)", sensitive=False)
+                item(f"    {d['name']}  ({d['backend']}: {d.get('unsupported') or 'not supported'})",
+                     sensitive=False)
                 continue
             label = f"    {d['name']}" + ("  (active)" if d["id"] == active_id else "")
             item(label, lambda d=d: self.mirror_to(d))
@@ -294,6 +295,8 @@ class CastTray(Gtk.Application):
 
         menu.append(Gtk.SeparatorMenuItem())
         item("Cast a media file…", self.cast_file)
+        item("Miracast (GNOME Network Displays)…",
+             lambda: self.launch(["mirror", "-b", "miracast"]))
         item("Refresh devices", lambda: self.refresh_devices(True))
         item("Quit", self.quit)
         menu.show_all()
@@ -336,8 +339,9 @@ class Flyout(Gtk.Window):
         b.connect("clicked", lambda _b: (self.hide(), cb()))
         self.box.pack_start(b, False, False, 0)
 
-    def _label(self, text, bold=False):
+    def _label(self, text, bold=False, sensitive=True):
         lbl = Gtk.Label(xalign=0)
+        lbl.set_sensitive(sensitive)
         lbl.set_markup(f"<b>{GLib.markup_escape_text(text)}</b>" if bold
                        else GLib.markup_escape_text(text))
         self.box.pack_start(lbl, False, False, 0)
@@ -355,10 +359,15 @@ class Flyout(Gtk.Window):
         for d in app.devices:
             if d.get("castable"):
                 self._button(d["name"], lambda d=d: app.mirror_to(d), DEVICE_ICONS)
+            else:
+                self._label(f"{d['name']} ({d['backend']}: {d.get('unsupported') or 'not supported'})",
+                            sensitive=False)
         if app.scanning:
             self._label("Searching…")
         elif not app.devices:
             self._label("No devices found")
+        self._button("Miracast (GNOME Network Displays)…",
+                     lambda: app.launch(["mirror", "-b", "miracast"]))
         self._label(f"Screen: {app.monitor_label()}  ·  audio {'on' if app.prefs.audio else 'off'}")
         self.box.show_all()  # show new children without popping the window up
 

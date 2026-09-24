@@ -6,7 +6,8 @@ Windows-style "Cast to device" for Linux. Pluggable per-protocol backends:
 |------------|--------|-----|
 | Chromecast | working: mirror + files/URLs | ffmpeg → HLS served over LAN → Default Media Receiver |
 | Miracast   | hand-off | needs a Wi-Fi Direct capable card; launches GNOME Network Displays |
-| AirPlay    | discovery only | lists Apple TVs via mDNS; casting needs pairing (pyatv is the likely path) |
+| DLNA       | mirror + files/URLs | ffmpeg → continuous MPEG-TS for mirroring; files served as-is |
+| AirPlay    | pairing + video backend; compatible receiver playback unverified | pyatv; URL playback and HLS mirroring on video-capable receivers |
 
 ## Setup
 
@@ -39,9 +40,12 @@ anywhere (terminal, applet, Nemo) shows up everywhere, survives a panel restart,
 ## Usage
 
 ```sh
-linuxcast devices                  # everything castable on the LAN
+linuxcast devices                  # discovered targets, including unsupported reasons
 linuxcast mirror                   # primary monitor + desktop audio
 linuxcast mirror -m DP-2 -d bedroom --no-audio
+linuxcast mirror -b dlna -d living # DLNA screen mirroring
+linuxcast mirror -b miracast       # open GNOME Network Displays
+linuxcast pair -b airplay -d TV    # one-time AirPlay pairing
 linuxcast play movie.mkv           # auto-transcodes if Chromecast can't decode it
 linuxcast play https://example.com/video.mp4
 linuxcast status                   # what this machine is casting
@@ -67,3 +71,28 @@ linuxcast backends | monitors      # diagnostics
 - Output is always letterboxed to 1920×1080, so portrait/ultrawide monitors are fine.
 - The receiver fetches media from this machine over HTTP on a random port, so a
   firewall must allow inbound LAN connections.
+
+Miracast is an external handoff: use `linuxcast mirror -b miracast` or the
+"Miracast (GNOME Network Displays)…" action in either desktop UI. Choose the
+receiver and stop the session in GNOME Network Displays; these sessions are not
+tracked by `linuxcast status` or controlled by `linuxcast stop`. Native Miracast
+peer discovery and streaming are not implemented.
+
+AirPlay receivers without URL-video support are listed with a reason and cannot
+be selected for video casting. Pairing is still allowed. The tested Samsung is
+in this category; successful pairing does not enable AirPlay video on it.
+DLNA is its working video route. File casts through DLNA and AirPlay expose only
+the registered media file, not its containing directory.
+
+## Development checks
+
+```sh
+.venv/bin/python -m unittest discover -s tests -v
+bash -n install.sh
+git diff --check
+```
+
+The regression suite uses mocked receivers, temporary files, child processes,
+and HTTP servers bound to localhost. It does not cast to real devices. A test
+environment must permit local sockets. Hardware playback and desktop UI rendering
+still require separate checks.

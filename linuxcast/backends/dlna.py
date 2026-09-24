@@ -9,6 +9,7 @@ to the AVTransport service; there is no push status, so the session polls.
 from __future__ import annotations
 
 import mimetypes
+from contextlib import ExitStack
 import shutil
 import socket
 import subprocess
@@ -151,24 +152,20 @@ class DlnaBackend(Backend):
         _soap(ctl, "Play", {"InstanceID": "0", "Speed": "1"})
 
     def mirror(self, device, opts: CaptureOptions):
-        server = MediaServer(Path("/nonexistent"), local_ip_for(device.host)).start()
-        cmd = capture.screen_ts_command(opts)
-        proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE)
-        stream = Broadcaster(proc.stdout, align=188)
-        url = server.add_live("screen.ts", stream, LIVE_MIME, {
-            "transferMode.dlna.org": "Streaming",
-            "contentFeatures.dlna.org": LIVE_FEATURES})
-
-        def cleanup():
-            if proc.poll() is None:
-                proc.terminate()
-                try:
-                    proc.wait(5)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-            server.close()
-
+        resources = ExitStack()
+        cleanup = resources.close
         try:
+            cmd = capture.screen_ts_command(opts)
+            server = MediaServer(None, local_ip_for(device.host)).start()
+            resources.callback(server.close)
+            proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE)
+            resources.callback(proc.stdout.close)
+            resources.callback(capture.stop_process, proc)
+            stream = Broadcaster(proc.stdout, align=188)
+            url = server.add_live("screen.ts", stream, LIVE_MIME, {
+                "transferMode.dlna.org": "Streaming",
+                "contentFeatures.dlna.org": LIVE_FEATURES})
+
             # Audio capture takes a few seconds to start and holds video back until
             # it does; a TV told to play before data flows gives up.
             if not stream.wait_for(256 * 1024, timeout=20):
@@ -189,7 +186,7 @@ class DlnaBackend(Backend):
             raise FileNotFoundError(source)
         mime = (MIME_OVERRIDES.get(path.suffix.lower())
                 or mimetypes.guess_type(path.name)[0] or "video/mp4")
-        server = MediaServer(path.parent, local_ip_for(device.host)).start()
+        server = MediaServer(None, local_ip_for(device.host)).start()
         url = server.add_file(path)
         try:
             self._load(device, url, path.name, mime, FILE_FEATURES, not mime.startswith("audio"))

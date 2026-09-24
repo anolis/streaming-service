@@ -275,6 +275,8 @@ class CastApplet extends Applet.IconApplet {
 
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
         this.menu.addAction("Cast a media file…", () => this._castFile());
+        this.menu.addAction("Miracast (GNOME Network Displays)…",
+                            () => this._launch(["mirror", "-b", "miracast"]));
         this.menu.addAction("Refresh devices", () => this._refreshDevices(true));
     }
 
@@ -298,7 +300,7 @@ class CastApplet extends Applet.IconApplet {
         let activeId = this.state ? this.state.device.id : null;
         // "Searching…" only shows with an empty list, so a scan that finds the
         // same devices doesn't touch the items under the pointer.
-        let key = JSON.stringify([this.devices.map(d => [d.id, d.name, d.castable]),
+        let key = JSON.stringify([this.devices.map(d => [d.id, d.name, d.castable, d.unsupported, d.host, d.extra]),
                                   activeId, this.scanning && this.devices.length === 0]);
         if (key === this._devicesKey)
             return;
@@ -308,7 +310,7 @@ class CastApplet extends Applet.IconApplet {
         for (let device of this.devices) {
             let label = device.name;
             if (!device.castable)
-                label += `  (${device.backend}: not supported yet)`;
+                label += `  (${device.backend}: ${device.unsupported || "not supported"})`;
             else if (device.id === activeId)
                 label += "  (active)";
             let item = new PopupMenu.PopupIconMenuItem(label, DEVICE_ICONS[0], St.IconType.SYMBOLIC,

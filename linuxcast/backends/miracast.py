@@ -3,7 +3,7 @@
 Miracast is Wi-Fi Direct (P2P) + RTSP + an MPEG-TS/RTP stream. Doing it from
 scratch needs a Wi-Fi card with P2P support and NetworkManager's wifi-p2p device;
 GNOME Network Displays already implements the whole stack, so for now we detect
-it and hand off to it rather than reimplementing. No hardware here to test with.
+it and hand off to it rather than reimplementing. Receiver selection and session control remain in that application.
 """
 
 from __future__ import annotations
@@ -27,6 +27,8 @@ def _gnd_command() -> list[str] | None:
 
 
 def _has_p2p_device() -> bool:
+    if not shutil.which("nmcli"):
+        return False
     r = subprocess.run(["nmcli", "-t", "-f", "TYPE", "device"], capture_output=True, text=True)
     return "wifi-p2p" in r.stdout
 
@@ -45,12 +47,18 @@ class MiracastBackend(Backend):
         # P2P peer discovery lives inside GND for now; nothing to list headlessly.
         return []
 
-    def mirror(self, device, capture):
+    def launch(self):
+        ok, reason = self.available()
+        if not ok:
+            raise BackendUnavailable(reason)
         cmd = _gnd_command()
         if not cmd:
             raise BackendUnavailable(self.available()[1])
-        subprocess.Popen(cmd)
-        raise BackendUnavailable("opened GNOME Network Displays; pick the sink there")
+        subprocess.Popen(cmd, start_new_session=True, stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def mirror(self, device, capture):
+        raise BackendUnavailable("use linuxcast mirror -b miracast to open GNOME Network Displays")
 
     def play(self, device, source):
         raise BackendUnavailable("Miracast only mirrors; use `mirror` instead")

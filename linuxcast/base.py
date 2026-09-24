@@ -52,6 +52,10 @@ class Backend(abc.ABC):
     def discover(self, timeout: float = 5.0) -> list[Device]:
         ...
 
+    def unsupported_reason(self, device: Device) -> str | None:
+        """Why this particular device can't be cast to, or None if it can."""
+        return None if self.can_cast else "not supported yet"
+
     @abc.abstractmethod
     def mirror(self, device: Device, capture: "CaptureOptions") -> "Session":
         """Start mirroring the screen to device."""

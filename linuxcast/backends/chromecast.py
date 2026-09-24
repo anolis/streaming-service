@@ -9,6 +9,7 @@ latency (see LIVE_START_OFFSET_S): fine for video, not for games.
 from __future__ import annotations
 
 import mimetypes
+from contextlib import ExitStack
 import shutil
 import tempfile
 import threading
@@ -85,19 +86,18 @@ class ChromecastBackend(Backend):
         return session
 
     def mirror(self, device, opts: CaptureOptions):
-        workdir = Path(opts.workdir or tempfile.mkdtemp(prefix="linuxcast-"))
-        server = MediaServer(workdir, local_ip_for(device.host)).start()
-        server.set_playlist_header(
-            f"#EXT-X-START:TIME-OFFSET=-{capture.LIVE_START_OFFSET_S},PRECISE=YES")
-        hls = capture.HlsProcess(capture.screen_command(opts, workdir), workdir)
-
-        def cleanup():
-            hls.stop()
-            server.close()
-            shutil.rmtree(workdir, ignore_errors=True)
-
+        resources = ExitStack()
+        cleanup = resources.close
         try:
-            # The start offset only works once that much stream exists.
+            workdir = Path(opts.workdir or tempfile.mkdtemp(prefix="linuxcast-"))
+            if opts.workdir is None:
+                resources.callback(shutil.rmtree, workdir, ignore_errors=True)
+            server = MediaServer(workdir, local_ip_for(device.host)).start()
+            resources.callback(server.close)
+            server.set_playlist_header(
+                f"#EXT-X-START:TIME-OFFSET=-{capture.LIVE_START_OFFSET_S},PRECISE=YES")
+            hls = capture.HlsProcess(capture.screen_command(opts, workdir), workdir)
+            resources.callback(hls.stop)
             hls.wait_ready(segments=capture.LIVE_START_OFFSET_S + 2,
                            timeout=capture.LIVE_START_OFFSET_S + 20)
             s = self._start(device, server.url(capture.PLAYLIST), "application/x-mpegURL",
@@ -117,20 +117,18 @@ class ChromecastBackend(Backend):
         path = Path(source).expanduser()
         if not path.is_file():
             raise FileNotFoundError(source)
-        workdir = Path(tempfile.mkdtemp(prefix="linuxcast-"))
-        server = MediaServer(workdir, local_ip_for(device.host)).start()
+        resources = ExitStack()
+        cleanup = resources.close
         hls = None
-
-        def cleanup():
-            if hls:
-                hls.stop()
-            server.close()
-            shutil.rmtree(workdir, ignore_errors=True)
-
         try:
+            workdir = Path(tempfile.mkdtemp(prefix="linuxcast-"))
+            resources.callback(shutil.rmtree, workdir, ignore_errors=True)
+            server = MediaServer(workdir, local_ip_for(device.host)).start()
+            resources.callback(server.close)
             if capture.needs_transcode(str(path)):
                 print(f"{path.name}: format not native to Chromecast, transcoding on the fly")
                 hls = capture.HlsProcess(capture.transcode_command(str(path), workdir), workdir)
+                resources.callback(hls.stop)
                 hls.wait_ready()
                 url, ctype = server.url(capture.PLAYLIST), "application/x-mpegURL"
             else:
@@ -226,5 +224,7 @@ class CastSession(Session, MediaStatusListener):
             if not self._done.is_set():
                 self.cast.quit_app()
         finally:
-            self.cast.disconnect(timeout=3)
-            self._cleanup()
+            try:
+                self.cast.disconnect(timeout=3)
+            finally:
+                self._cleanup()
