@@ -73,16 +73,11 @@ class ChromecastBackend(Backend):
             fmt = "fmp4" if capture.SEGMENT_TYPE == "fmp4" else "ts"
             media_info = {"hlsSegmentFormat": fmt,
                           "hlsVideoSegmentFormat": "fmp4" if fmt == "fmp4" else "mpeg2_ts"}
-
-        def load():
+        try:
             mc.play_media(url, content_type, title=title,
                           stream_type="LIVE" if live else "BUFFERED", media_info=media_info)
             mc.block_until_active(timeout=15)
             session.bind(mc.status)
-
-        session.reload = load
-        try:
-            load()
         except BaseException:
             # Stopped mid-connect: don't leave the receiver on a dead stream.
             cast.quit_app()
@@ -161,29 +156,25 @@ def _log(msg):
 
 
 class CastSession(Session, MediaStatusListener):
+    IDLE_GRACE_S = 15
+
     def __init__(self, cast, cleanup):
         self.cast = cast
         self._cleanup = cleanup
         self._done = threading.Event()
-        self._seen_playing = False
         self.child = None  # ffmpeg process, if any
         self.last_error = None
         self._live_edge = None  # callable -> seconds at the live edge, for logging lag
         self._last_state = None
         self._media_session = None  # ours, once the load is active
         self.end_note = None  # why the receiver ended a cast we didn't stop
-        self.reload = None  # re-sends the load; set by the backend
-        self._played = False
-        self._reload_pending = False
-        self._reloaded = False
+        self._idle_since = None  # reasonless IDLE: transitional unless it lasts
 
     def bind(self, status):
         """Only our own media session's status counts from here on. Until then the
         receiver may still report on whatever it played before (e.g. BUFFERING then
         IDLE as the old media is replaced), which must not end our cast."""
         self._media_session = status.media_session_id
-        if status.player_state in ("PLAYING", "BUFFERING"):
-            self._seen_playing = True
 
     def watch_live(self, live_edge):
         self._live_edge = live_edge
@@ -206,26 +197,21 @@ class CastSession(Session, MediaStatusListener):
             self.end_note = "another device started casting to it"
             self._done.set()
             return
-        if status.player_state in ("PLAYING", "BUFFERING"):
-            self._seen_playing = True
-            self._played |= status.player_state == "PLAYING"
-        elif (status.player_state == "IDLE" and not self._played and not self._reloaded
-              and self.reload and status.idle_reason != "ERROR"):
-            # Seen twice, not reproducible on demand: the receiver accepts the
-            # load, buffers, then drops it without a reason before a frame plays.
-            # Loading again once is harmless and gets the cast going.
-            _log("receiver dropped the stream before it played; loading it again")
-            self._reloaded = True
-            self._media_session = None  # ignore status until the new load is bound
-            self._seen_playing = False
-            self._reload_pending = True
-        elif status.player_state == "IDLE" and self._seen_playing:
-            if status.idle_reason == "ERROR":
-                self.last_error = "receiver reported a playback error"
-            elif self._live_edge:
-                # A live mirror never finishes by itself.
-                self.end_note = "stopped from the TV or another device"
-            self._done.set()
+        if status.player_state != "IDLE":
+            self._idle_since = None
+            return
+        if not status.idle_reason:
+            # The receiver passes through IDLE with no reason while loading (and
+            # while being taken over); only a reasoned IDLE means the media ended.
+            if self._idle_since is None:
+                self._idle_since = time.monotonic()
+            return
+        if status.idle_reason == "ERROR":
+            self.last_error = "receiver reported a playback error"
+        elif self._live_edge:
+            # A live mirror never finishes by itself.
+            self.end_note = "stopped from the TV or another device"
+        self._done.set()
 
     def load_media_failed(self, queue_item_id, error_code):
         self.last_error = f"receiver failed to load media (error {error_code})"
@@ -233,13 +219,9 @@ class CastSession(Session, MediaStatusListener):
 
     def wait(self):
         while not self._done.wait(0.5):
-            if self._reload_pending:
-                self._reload_pending = False
-                try:
-                    self.reload()
-                except Exception as e:
-                    self.last_error = f"reloading the stream failed: {e}"
-                    break
+            if self._idle_since and time.monotonic() - self._idle_since > self.IDLE_GRACE_S:
+                self.end_note = "the receiver went idle"
+                break
             if self.child is not None and self.child.poll() is not None and self.child.returncode:
                 self.last_error = f"ffmpeg exited with code {self.child.returncode}"
                 break
