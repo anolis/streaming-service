@@ -110,7 +110,6 @@ class _Handler(SimpleHTTPRequestHandler):
             except (BrokenPipeError, ConnectionResetError):
                 pass  # receivers routinely abort range requests while seeking
 
-
     def _send_playlist(self):
         try:
             text = Path(self.translate_path(self.path)).read_text()
