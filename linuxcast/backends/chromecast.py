@@ -73,11 +73,16 @@ class ChromecastBackend(Backend):
             fmt = "fmp4" if capture.SEGMENT_TYPE == "fmp4" else "ts"
             media_info = {"hlsSegmentFormat": fmt,
                           "hlsVideoSegmentFormat": "fmp4" if fmt == "fmp4" else "mpeg2_ts"}
-        try:
+
+        def load():
             mc.play_media(url, content_type, title=title,
                           stream_type="LIVE" if live else "BUFFERED", media_info=media_info)
             mc.block_until_active(timeout=15)
             session.bind(mc.status)
+
+        session.reload = load
+        try:
+            load()
         except BaseException:
             # Stopped mid-connect: don't leave the receiver on a dead stream.
             cast.quit_app()
@@ -167,6 +172,10 @@ class CastSession(Session, MediaStatusListener):
         self._last_state = None
         self._media_session = None  # ours, once the load is active
         self.end_note = None  # why the receiver ended a cast we didn't stop
+        self.reload = None  # re-sends the load; set by the backend
+        self._played = False
+        self._reload_pending = False
+        self._reloaded = False
 
     def bind(self, status):
         """Only our own media session's status counts from here on. Until then the
@@ -199,6 +208,17 @@ class CastSession(Session, MediaStatusListener):
             return
         if status.player_state in ("PLAYING", "BUFFERING"):
             self._seen_playing = True
+            self._played |= status.player_state == "PLAYING"
+        elif (status.player_state == "IDLE" and not self._played and not self._reloaded
+              and self.reload and status.idle_reason != "ERROR"):
+            # Seen twice, not reproducible on demand: the receiver accepts the
+            # load, buffers, then drops it without a reason before a frame plays.
+            # Loading again once is harmless and gets the cast going.
+            _log("receiver dropped the stream before it played; loading it again")
+            self._reloaded = True
+            self._media_session = None  # ignore status until the new load is bound
+            self._seen_playing = False
+            self._reload_pending = True
         elif status.player_state == "IDLE" and self._seen_playing:
             if status.idle_reason == "ERROR":
                 self.last_error = "receiver reported a playback error"
@@ -213,6 +233,13 @@ class CastSession(Session, MediaStatusListener):
 
     def wait(self):
         while not self._done.wait(0.5):
+            if self._reload_pending:
+                self._reload_pending = False
+                try:
+                    self.reload()
+                except Exception as e:
+                    self.last_error = f"reloading the stream failed: {e}"
+                    break
             if self.child is not None and self.child.poll() is not None and self.child.returncode:
                 self.last_error = f"ffmpeg exited with code {self.child.returncode}"
                 break
