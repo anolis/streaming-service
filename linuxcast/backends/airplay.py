@@ -182,11 +182,11 @@ class AirPlayBackend(Backend):
             server = MediaServer(workdir, local_ip_for(device.host)).start()
             resources.callback(server.close)
             server.set_playlist_header(
-                f"#EXT-X-START:TIME-OFFSET=-{capture.LIVE_START_OFFSET_S},PRECISE=YES")
+                f"#EXT-X-START:TIME-OFFSET=-{opts.buffer_seconds},PRECISE=YES")
             hls = capture.HlsProcess(capture.screen_command(opts, workdir), workdir)
             resources.callback(hls.stop)
-            hls.wait_ready(segments=capture.LIVE_START_OFFSET_S + 2,
-                           timeout=capture.LIVE_START_OFFSET_S + 20)
+            hls.wait_ready(segments=opts.buffer_seconds + 2,
+                           timeout=opts.buffer_seconds + 20)
             s = self._start(device, server.url(capture.PLAYLIST), cleanup, live=True)
         except BaseException:
             cleanup()

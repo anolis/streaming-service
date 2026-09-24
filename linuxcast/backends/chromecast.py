@@ -3,7 +3,7 @@
 Chromecast can't receive arbitrary screen-mirroring streams (Chrome's tab/desktop
 mirroring uses a private Cast Streaming app), so mirroring works by encoding the
 screen to HLS and pointing the Default Media Receiver at it. Expect ~10 s of
-latency (see LIVE_START_OFFSET_S): fine for video, not for games.
+latency at the default 8-second playback offset: fine for video, not for games.
 """
 
 from __future__ import annotations
@@ -95,11 +95,11 @@ class ChromecastBackend(Backend):
             server = MediaServer(workdir, local_ip_for(device.host)).start()
             resources.callback(server.close)
             server.set_playlist_header(
-                f"#EXT-X-START:TIME-OFFSET=-{capture.LIVE_START_OFFSET_S},PRECISE=YES")
+                f"#EXT-X-START:TIME-OFFSET=-{opts.buffer_seconds},PRECISE=YES")
             hls = capture.HlsProcess(capture.screen_command(opts, workdir), workdir)
             resources.callback(hls.stop)
-            hls.wait_ready(segments=capture.LIVE_START_OFFSET_S + 2,
-                           timeout=capture.LIVE_START_OFFSET_S + 20)
+            hls.wait_ready(segments=opts.buffer_seconds + 2,
+                           timeout=opts.buffer_seconds + 20)
             s = self._start(device, server.url(capture.PLAYLIST), "application/x-mpegURL",
                             "Linux screen", live=True, cleanup=cleanup)
         except BaseException:

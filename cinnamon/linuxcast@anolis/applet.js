@@ -34,6 +34,9 @@ class CastApplet extends Applet.IconApplet {
         this.settings.bind("include-audio", "includeAudio");
         this.settings.bind("monitor", "monitor");
         this.settings.bind("linuxcast-path", "binPath");
+        this.settings.bind("output-resolution", "outputResolution", () => { if (this._built) this._syncQuality(); });
+        this.settings.bind("target-fps", "targetFps", () => { if (this._built) this._syncQuality(); });
+        this.settings.bind("buffer-seconds", "bufferSeconds", () => { if (this._built) this._syncQuality(); });
 
         this.menuManager = new PopupMenu.PopupMenuManager(this);
         this.menu = new Applet.AppletPopupMenu(this, orientation);
@@ -191,7 +194,9 @@ class CastApplet extends Applet.IconApplet {
     // ---- actions --------------------------------------------------------------
 
     _mirrorTo(device) {
-        let args = ["mirror", "--target", JSON.stringify(device)];
+        let args = ["mirror", "--target", JSON.stringify(device),
+                    "--resolution", this.outputResolution, "--fps", String(this.targetFps),
+                    "--buffer", String(this.bufferSeconds)];
         if (this.monitor)
             args.push("-m", this.monitor);
         if (!this.includeAudio)
@@ -254,6 +259,7 @@ class CastApplet extends Applet.IconApplet {
         this._syncStatus();
         this._syncDevices();
         this._syncScreens();
+        this._syncQuality();
     }
 
     _buildMenu() {
@@ -272,12 +278,39 @@ class CastApplet extends Applet.IconApplet {
         this._audio = new PopupMenu.PopupSwitchMenuItem("Include desktop audio", this.includeAudio);
         this._audio.connect("toggled", (item, on) => { this.includeAudio = on; });
         this.menu.addMenuItem(this._audio);
+        this._quality = new PopupMenu.PopupSubMenuMenuItem("Mirroring settings");
+        this.menu.addMenuItem(this._quality);
+        this._quality.menu.addMenuItem(this._header("Applies to the next cast"));
+        this._qualityItems = [];
+        for (let [property, label, choices] of [
+            ["outputResolution", "Resolution", ["480p", "720p", "1080p", "1440p", "2160p"]],
+            ["targetFps", "Frame rate", [15, 24, 30, 60]],
+            ["bufferSeconds", "Buffer (Chromecast/AirPlay)", [2, 4, 8, 12, 20]]]) {
+            let sub = new PopupMenu.PopupSubMenuMenuItem(label);
+            this._quality.menu.addMenuItem(sub);
+            for (let value of choices) {
+                let text = property === "targetFps" ? `${value} fps` :
+                           property === "bufferSeconds" ? `${value} s` : value;
+                let item = new PopupMenu.PopupIndicatorMenuItem(text);
+                item.connect("activate", () => { this[property] = value; this._syncQuality(); });
+                sub.menu.addMenuItem(item);
+                this._qualityItems.push([property, value, item]);
+            }
+        }
+        this._quality.menu.addMenuItem(this._header("Smaller buffer: less delay, more stutter risk"));
+        this._quality.menu.addMenuItem(this._header("DLNA buffering is controlled by the TV"));
 
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
         this.menu.addAction("Cast a media file…", () => this._castFile());
         this.menu.addAction("Miracast (GNOME Network Displays)…",
                             () => this._launch(["mirror", "-b", "miracast"]));
         this.menu.addAction("Refresh devices", () => this._refreshDevices(true));
+    }
+
+    _syncQuality() {
+        this._quality.label.set_text(`Mirroring: ${this.outputResolution} · ${this.targetFps} fps · ${this.bufferSeconds} s buffer`);
+        for (let [property, value, item] of this._qualityItems)
+            item.setOrnament(PopupMenu.OrnamentType.DOT, this[property] === value);
     }
 
     _syncStatus() {

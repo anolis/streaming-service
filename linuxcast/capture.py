@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
 
-from linuxcast.base import CaptureOptions
+from linuxcast.base import CaptureOptions, RESOLUTIONS
 
 PLAYLIST = "stream.m3u8"
 SEGMENT_S = 1        # short segments keep latency down...
@@ -26,8 +26,6 @@ SEGMENT_TYPE = "fmp4"  # fmp4 | mpegts
 # Where the receiver starts, relative to live. Left to itself the Chromecast may
 # start ~3 segments back and, since it doesn't fetch ahead, then flips between
 # PLAYING and BUFFERING at every network hiccup.
-LIVE_START_OFFSET_S = 8
-OUT_W, OUT_H = 1920, 1080  # receivers get a fixed 16:9 1080p frame
 
 
 @dataclass
@@ -95,10 +93,11 @@ def video_encoder_args(choice: str, fps: int, bitrate: str) -> list[str]:
     raise RuntimeError(f"encoder {choice!r} is not usable on this machine")
 
 
-def _scale_filter(hw_vaapi: bool) -> str:
-    # Letterbox anything (portrait monitors, 16:10, 4K) into a 1080p frame.
-    f = (f"scale={OUT_W}:{OUT_H}:force_original_aspect_ratio=decrease,"
-         f"pad={OUT_W}:{OUT_H}:(ow-iw)/2:(oh-ih)/2,setsar=1")
+def _scale_filter(hw_vaapi: bool, resolution: str = "1080p") -> str:
+    # Keep the aspect ratio and ensure even dimensions for 4:2:0 encoding.
+    width, height = RESOLUTIONS[resolution]
+    f = (f"scale={width}:{height}:force_original_aspect_ratio=decrease:force_divisible_by=2,"
+         f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1")
     return f + (",format=nv12,hwupload" if hw_vaapi else ",format=yuv420p")
 
 
@@ -143,7 +142,7 @@ def _screen_capture(opts: CaptureOptions) -> list[str]:
            "-i", f"{display}+{mon.x},{mon.y}"]
     if opts.audio:
         cmd += ["-thread_queue_size", "512", "-f", "pulse", "-i", default_audio_monitor()]
-    cmd += ["-vf", _scale_filter("h264_vaapi" in venc), *venc]
+    cmd += ["-vf", _scale_filter("h264_vaapi" in venc, opts.resolution), *venc]
     # aresample async smooths PulseAudio's jittery capture timestamps
     audio = ["-af", "aresample=async=1000", "-c:a", "aac", "-b:a", "160k", "-ar", "48000"]
     cmd += audio if opts.audio else ["-an"]

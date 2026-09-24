@@ -15,7 +15,7 @@ from pathlib import Path
 
 from linuxcast import capture, session
 from linuxcast.backends import BACKENDS
-from linuxcast.base import BackendUnavailable, CaptureOptions, Device
+from linuxcast.base import BackendUnavailable, CaptureOptions, Device, RESOLUTIONS
 
 ICON = "video-display-symbolic"
 
@@ -179,9 +179,10 @@ def cmd_mirror(args):
         print("Opened GNOME Network Displays; choose a display and stop mirroring there.")
         return
     opts = CaptureOptions(monitor=args.monitor, audio=not args.no_audio, fps=args.fps,
-                          bitrate=args.bitrate, encoder=args.encoder)
+                          bitrate=args.bitrate, encoder=args.encoder,
+                          resolution=args.resolution, buffer_seconds=args.buffer_seconds)
     mon = capture.pick_monitor(args.monitor).name
-    run_session(args, "mirror", f"Screen {mon}", lambda b, device: b.mirror(device, opts))
+    run_session(args, "mirror", f"Screen {mon} · {opts.resolution} · {opts.fps} fps", lambda b, device: b.mirror(device, opts))
 
 
 def cmd_play(args):
@@ -256,7 +257,13 @@ def main(argv=None):
     m = add("mirror", cmd_mirror, "mirror a monitor (with desktop audio)")
     m.add_argument("-m", "--monitor", help="xrandr output name (default: primary)")
     m.add_argument("--no-audio", action="store_true")
-    m.add_argument("--fps", type=int, default=30)
+    m.add_argument("--fps", type=int, choices=range(1, 61), metavar="1-60", default=30,
+                   help="target frame rate (default: 30)")
+    m.add_argument("--resolution", choices=list(RESOLUTIONS), default="1080p",
+                   help="mirrored output resolution (default: 1080p)")
+    m.add_argument("--buffer", "--buffer-seconds", dest="buffer_seconds", type=int,
+                   choices=range(2, 21), metavar="2-20", default=8,
+                   help="Chromecast/AirPlay playback buffer in seconds; lower reduces delay but may stutter (default: 8; DLNA buffering is receiver-controlled)")
     m.add_argument("--bitrate", default="8M", help="max video bitrate (default 8M)")
     m.add_argument("--encoder", choices=["auto", "nvenc", "vaapi", "x264"], default="auto")
 

@@ -42,7 +42,9 @@ which the CLI keeps current (`searching` → `connecting` → `casting`). So a c
 anywhere (terminal, applet, Nemo) shows up everywhere, survives a panel restart, and
 `linuxcast stop` ends it. Starting a new cast replaces the current one, like Windows.
 
-- Applet settings (right-click → Configure): hotkey, audio, monitor, `linuxcast` path.
+- Cinnamon: open the Cast menu → Mirroring for resolution, frame rate and buffer
+  presets; right-click → Configure also exposes these settings and the hotkey.
+- Xfce: choose Mirroring settings from the tray menu or flyout.
 - The tray autostarts in desktop sessions other than Cinnamon (which uses its
   own panel applet) and keeps its
   screen/audio choices in `~/.config/linuxcast/tray.json`. It runs on the system
@@ -67,20 +69,45 @@ linuxcast backends | monitors      # diagnostics
 
 `LINUXCAST_DEBUG=1` prints the ffmpeg command and HTTP requests.
 
+## Mirroring responsiveness
+
+Resolution, target frame rate and playback buffer can be saved through the desktop
+controls. They apply to the next cast; restart an active cast to use new values.
+The defaults remain **1080p, 30 fps, 8 seconds**.
+
+```sh
+linuxcast mirror --resolution 720p --fps 30 --buffer 4
+```
+
+- Resolution: 480p, 720p, 1080p, 1440p or 2160p. Lower resolutions reduce encoding
+  and network load. The encoder and receiver must support the selected output.
+- Target frame rate: 15, 24, 30 or 60 fps in the desktop UI; 1–60 via `--fps`.
+  Higher rates look smoother but require more processing and bandwidth.
+- Playback buffer: 2–20 seconds via `--buffer` (alias `--buffer-seconds`). This
+  changes Chromecast/AirPlay's requested HLS start offset and waits for enough
+  media to support it. Smaller values reduce the requested delay but can increase
+  stuttering. Actual latency also depends on capture, network and receiver behavior.
+
+Resolution and frame rate apply to Chromecast, DLNA and compatible AirPlay screen
+mirroring. DLNA buffering is controlled by the TV; the playback-buffer option has
+no effect there. These settings do not change file playback or the external
+GNOME Network Displays handoff.
+
 ## Notes
 
 - Chromecast mirroring runs ~10 s behind live, on purpose. The Default Media
   Receiver doesn't prefetch live HLS, so if it plays near the live edge every Wi-Fi
   hiccup shows the buffering spinner; the served playlist carries
   `EXT-X-START:TIME-OFFSET=-8` to park it far enough back
-  (`LIVE_START_OFFSET_S` in `capture.py`). Chrome's low-latency mirroring uses
+  by default; `--buffer` changes that offset. Chrome's low-latency mirroring uses
   Google's proprietary Cast Streaming receiver, which third-party senders can't use.
 - Segments are fMP4 with a 30 s playlist window, and video is quality-targeted VBR
   capped at `--bitrate`, so a static desktop costs ~1 Mbit/s rather than a constant 6.
 - Cast logs record receiver state changes and lag, e.g.
   `receiver BUFFERING (lag 3.0s)`, which is the first place to look if it stutters.
 - Encoder is picked automatically: NVENC → VAAPI → libx264.
-- Output is always letterboxed to 1920×1080, so portrait/ultrawide monitors are fine.
+- Mirroring output is letterboxed to the chosen resolution (1080p by default),
+  including portrait/ultrawide inputs. File transcoding remains at 1080p.
 - The receiver fetches media from this machine over HTTP on a random port, so a
   firewall must allow inbound LAN connections.
 

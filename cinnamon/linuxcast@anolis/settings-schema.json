@@ -18,5 +18,40 @@
         "type": "entry",
         "default": "~/.local/bin/linuxcast",
         "description": "Path to the linuxcast command"
+    },
+    "output-resolution": {
+        "type": "combobox",
+        "default": "1080p",
+        "description": "Mirroring output resolution",
+        "options": {
+            "480p": "480p",
+            "720p": "720p",
+            "1080p": "1080p",
+            "1440p": "1440p",
+            "2160p": "2160p"
+        },
+        "tooltip": "Lower resolutions reduce encoding and network load. Applies to the next cast."
+    },
+    "target-fps": {
+        "type": "combobox",
+        "default": 30,
+        "description": "Target frame rate",
+        "options": {
+            "15 fps": 15,
+            "24 fps": 24,
+            "30 fps": 30,
+            "60 fps": 60
+        },
+        "tooltip": "Higher frame rates look smoother but require more processing and bandwidth. Applies to the next cast."
+    },
+    "buffer-seconds": {
+        "type": "spinbutton",
+        "default": 8,
+        "min": 2,
+        "max": 20,
+        "step": 1,
+        "units": "seconds",
+        "description": "Playback buffer (Chromecast/AirPlay)",
+        "tooltip": "Lower values reduce delay but may stutter. The TV may add buffering. DLNA buffering is controlled by the TV. Applies to the next cast."
     }
 }

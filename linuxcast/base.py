@@ -81,6 +81,10 @@ class Session(abc.ABC):
         ...
 
 
+RESOLUTIONS = {"480p": (854, 480), "720p": (1280, 720), "1080p": (1920, 1080),
+               "1440p": (2560, 1440), "2160p": (3840, 2160)}
+
+
 @dataclass
 class CaptureOptions:
     monitor: str | None = None      # xrandr output name, None = primary
@@ -89,3 +93,13 @@ class CaptureOptions:
     bitrate: str = "8M"             # cap; actual rate follows screen complexity
     encoder: str = "auto"           # auto | nvenc | vaapi | x264
     workdir: Path | None = None
+    resolution: str = "1080p"
+    buffer_seconds: int = 8        # HLS playback offset, not encoder VBV size
+
+    def __post_init__(self):
+        if self.resolution not in RESOLUTIONS:
+            raise ValueError(f"unsupported output resolution: {self.resolution}")
+        if not 1 <= self.fps <= 60:
+            raise ValueError("target frame rate must be between 1 and 60")
+        if not 2 <= self.buffer_seconds <= 20:
+            raise ValueError("playback buffer must be between 2 and 20 seconds")

@@ -29,6 +29,8 @@ RUNTIME = Path(os.environ.get("XDG_RUNTIME_DIR") or f"/tmp/linuxcast-{os.getuid(
 STATE_FILE = RUNTIME / "session.json"
 LOG_FILE = RUNTIME / "tray.log"
 PREFS_FILE = Path(GLib.get_user_config_dir()) / "linuxcast" / "tray.json"
+RESOLUTIONS = ["480p", "720p", "1080p", "1440p", "2160p"]
+FRAME_RATES = [15, 24, 30, 60]
 DEVICE_TTL_SECONDS = 60
 ICON_IDLE = "video-display-symbolic"
 ICON_ACTIVE = "screen-shared-symbolic"
@@ -58,10 +60,21 @@ class Prefs:
             data = {}
         self.monitor: str = data.get("monitor", "")
         self.audio: bool = data.get("audio", True)
+        self.resolution = data.get("resolution", "1080p")
+        if self.resolution not in RESOLUTIONS:
+            self.resolution = "1080p"
+        self.fps = data.get("fps", 30)
+        if self.fps not in FRAME_RATES:
+            self.fps = 30
+        self.buffer_seconds = data.get("buffer_seconds", 8)
+        if type(self.buffer_seconds) is not int or not 2 <= self.buffer_seconds <= 20:
+            self.buffer_seconds = 8
 
     def save(self):
         PREFS_FILE.parent.mkdir(parents=True, exist_ok=True)
-        PREFS_FILE.write_text(json.dumps({"monitor": self.monitor, "audio": self.audio}))
+        PREFS_FILE.write_text(json.dumps({"monitor": self.monitor, "audio": self.audio,
+                                         "resolution": self.resolution, "fps": self.fps,
+                                         "buffer_seconds": self.buffer_seconds}))
 
 
 class CastTray(Gtk.Application):
@@ -173,7 +186,9 @@ class CastTray(Gtk.Application):
     # ---- actions ---------------------------------------------------------------------
 
     def mirror_to(self, device: dict):
-        args = ["mirror", "--target", json.dumps(device)]
+        args = ["mirror", "--target", json.dumps(device),
+                "--resolution", self.prefs.resolution, "--fps", str(self.prefs.fps),
+                "--buffer", str(self.prefs.buffer_seconds)]
         if self.prefs.monitor:
             args += ["-m", self.prefs.monitor]
         if not self.prefs.audio:
@@ -236,7 +251,8 @@ class CastTray(Gtk.Application):
         key = json.dumps([s and [s["status"], s["what"], s["device"]["id"]],
                           [[d["id"], d["name"], d.get("castable"), d.get("unsupported"), d.get("host"), d.get("extra")] for d in self.devices],
                           self.scanning and not self.devices, self.monitors,
-                          self.prefs.monitor, self.prefs.audio])
+                          self.prefs.monitor, self.prefs.audio, self.prefs.resolution,
+                          self.prefs.fps, self.prefs.buffer_seconds])
         if key != getattr(self, "_menu_key", None):
             self._menu_key = key
             self.indicator.set_menu(self._build_menu())
@@ -294,6 +310,7 @@ class CastTray(Gtk.Application):
         menu.append(audio)
 
         menu.append(Gtk.SeparatorMenuItem())
+        item("Mirroring settings…", self.show_settings)
         item("Cast a media file…", self.cast_file)
         item("Miracast (GNOME Network Displays)…",
              lambda: self.launch(["mirror", "-b", "miracast"]))
@@ -301,6 +318,44 @@ class CastTray(Gtk.Application):
         item("Quit", self.quit)
         menu.show_all()
         return menu
+
+    def show_settings(self):
+        dialog = Gtk.Dialog(title="Mirroring settings", transient_for=self.flyout,
+                            modal=True)
+        dialog.add_buttons("Cancel", Gtk.ResponseType.CANCEL, "Save", Gtk.ResponseType.OK)
+        box = dialog.get_content_area()
+        box.set_spacing(10)
+        box.set_border_width(16)
+        controls = []
+        for label, values, current in [
+                ("Output resolution", RESOLUTIONS, self.prefs.resolution),
+                ("Target frame rate", FRAME_RATES, self.prefs.fps)]:
+            row = Gtk.Box(spacing=12)
+            row.pack_start(Gtk.Label(label=label, xalign=0), True, True, 0)
+            combo = Gtk.ComboBoxText()
+            for value in values:
+                combo.append(str(value), str(value) + (" fps" if label == "Target frame rate" else ""))
+            combo.set_active_id(str(current))
+            row.pack_end(combo, False, False, 0)
+            box.pack_start(row, False, False, 0)
+            controls.append(combo)
+        row = Gtk.Box(spacing=12)
+        row.pack_start(Gtk.Label(label="Playback buffer (Chromecast/AirPlay)", xalign=0), True, True, 0)
+        buffer = Gtk.SpinButton.new_with_range(2, 20, 1)
+        buffer.set_value(self.prefs.buffer_seconds)
+        row.pack_end(buffer, False, False, 0)
+        box.pack_start(row, False, False, 0)
+        box.pack_start(Gtk.Label(label="Buffer is in seconds. Lower values reduce delay but may stutter.\n"
+                                "DLNA buffering is controlled by the TV.\n"
+                                "Settings apply to the next cast.", xalign=0), False, False, 0)
+        dialog.show_all()
+        if dialog.run() == Gtk.ResponseType.OK:
+            self.prefs.resolution = controls[0].get_active_id()
+            self.prefs.fps = int(controls[1].get_active_id())
+            self.prefs.buffer_seconds = buffer.get_value_as_int()
+            self.prefs.save()
+            self.rebuild()
+        dialog.destroy()
 
     def show_flyout(self):
         if self.flyout is None:
@@ -366,6 +421,8 @@ class Flyout(Gtk.Window):
             self._label("Searching…")
         elif not app.devices:
             self._label("No devices found")
+        self._button("Mirroring settings…", app.show_settings)
+        self._label(f"{app.prefs.resolution} · {app.prefs.fps} fps · {app.prefs.buffer_seconds} s buffer")
         self._button("Miracast (GNOME Network Displays)…",
                      lambda: app.launch(["mirror", "-b", "miracast"]))
         self._label(f"Screen: {app.monitor_label()}  ·  audio {'on' if app.prefs.audio else 'off'}")

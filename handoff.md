@@ -46,7 +46,7 @@ The UIs read `$XDG_RUNTIME_DIR/linuxcast/session.json` to show what's casting, s
 | CLI | `linuxcast/cli.py` | `devices`, `mirror`, `play`, `stop`, `status`, `pair`, `monitors`, `backends`; `--notify`, `--gui` picker, hidden `--target` (skip discovery) and `--pin-file` |
 | Session state | `linuxcast/session.py` | searching → connecting → casting; a new cast replaces the old one; `stop` with no device stops the local cast; replacement uses a control lock and state writes use a separate lock |
 | Interfaces | `linuxcast/base.py` | `Device`, `Backend` (with per-device `unsupported_reason`), `Session`, `CaptureOptions`, `log()` |
-| Capture | `linuxcast/capture.py` | x11grab + PulseAudio monitor → ffmpeg; NVENC → VAAPI → x264; letterboxed 1080p. Outputs live HLS (fMP4, 1 s segments, 30 s window) or one continuous MPEG-TS on stdout |
+| Capture | `linuxcast/capture.py` | x11grab + PulseAudio monitor → ffmpeg; NVENC → VAAPI → x264; selectable letterboxed output (default 1080p). Outputs live HLS (fMP4, 1 s segments, 30 s window) or one continuous MPEG-TS on stdout |
 | HTTP server | `linuxcast/httpserver.py` | Serves files with Range + DLNA headers, HLS playlists (no 304s, optional injected tags), and live streams fanned out by `Broadcaster` |
 | Chromecast | `linuxcast/backends/chromecast.py` | pychromecast; Default Media Receiver; `EXT-X-START:TIME-OFFSET=-8` |
 | DLNA | `linuxcast/backends/dlna.py` | SSDP discovery, SOAP AVTransport, session polls transport state every 1 s |
@@ -76,7 +76,7 @@ Nine commits since Sep 22, each driven by a problem seen on the real TVs; newest
 Work explicitly tried and removed (never shipped, or reverted):
 
 - Seek-back watchdog when the receiver starves: made buffering worse (99%).
-- `--buffer` startup cushion option: no measurable effect.
+- Earlier `--buffer` startup cushion experiment: no measurable effect. The new setting described below adjusts the actual HLS playback offset as well as readiness; it is not that removed startup-only experiment.
 - Advertising `EXT-X-TARGETDURATION:3`: no effect on where the player repositions.
 - "Stuck near live" recovery seek: didn't hold in the one stuck run.
 - 2-second segments: 85% buffering vs 2% with 1-second segments.
@@ -141,6 +141,17 @@ The user reported that `./install.sh all` did not produce a persistent icon on t
 - Has eight installer regression tests using temporary homes and mocked package managers/desktop services, including fresh Cinnamon setup, repeat installation, missing dependencies, Xfce without Cinnamon, headless setup and failure reporting.
 
 Installer tests do not install packages or alter the developer desktop. Actual installation on the user's Debian laptop still needs confirmation. The repository must remain in place because installation uses editable/symlinked files. Existing hardware validation limitations still apply.
+
+## Mirroring settings follow-up
+
+The user requested responsiveness controls, including output resolution, buffer size and target frame rate. Implemented in the CLI, Cinnamon Cast menu/Configure panel, and Xfce tray/flyout settings dialog:
+
+- Output resolution: 480p (854×480), 720p, 1080p, 1440p, 2160p. Scaling preserves aspect ratio with even dimensions and letterboxing for 4:2:0 encoding.
+- Target frame rate: 15/24/30/60 fps desktop presets; CLI `--fps` accepts 1–60. This controls capture rate and keyframe interval.
+- Playback buffer: `--buffer` / `--buffer-seconds`, 2–20 seconds. The Chromecast/AirPlay HLS start offset and startup readiness use this setting. The 30-second rolling playlist window remains unchanged. This is not a guaranteed end-to-end latency and does not tune ffmpeg's encoder VBV buffer.
+- Defaults: 1080p, 30 fps, 8 seconds. Desktop choices persist and apply to the next cast. File playback/transcoding and external Miracast handoff are unaffected. DLNA uses the chosen resolution/frame rate but the TV controls its playback buffering.
+
+Eight settings regressions cover defaults, validation, CLI and desktop forwarding, tray preference migration/persistence, HLS offsets/readiness at both limits, and actual ffmpeg encoding of a portrait input. The full 31-test suite passed, including installer, HTTP and process-contention regressions; JavaScript/shell syntax and whitespace checks passed. New resolutions/frame rates and reduced buffer settings still require receiver hardware validation. The user also asked about AirPlay: explain that the tested Samsung rejects URL-video playback despite successful pairing; native AirPlay screen mirroring is a separate unimplemented protocol path.
 
 ## Current delivery
 
