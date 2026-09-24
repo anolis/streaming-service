@@ -4,5 +4,5 @@ Name=Cast
 Comment=Cast your screen or media to Chromecast and other network displays
 Icon=video-display
 Exec=@TRAY@
-OnlyShowIn=XFCE;
+NotShowIn=X-Cinnamon;Cinnamon;
 X-GNOME-Autostart-enabled=true

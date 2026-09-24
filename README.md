@@ -16,8 +16,19 @@ Windows-style "Cast to device" for Linux. Pluggable per-protocol backends:
 ./install.sh all      # Cinnamon and Xfce integrations
 ```
 
-Needs `pipx`, `ffmpeg`, `xrandr`, `pactl`, `zenity` (X11 session; Wayland capture
-isn't supported yet). For development: `python3 -m venv .venv && .venv/bin/pip install -e .`
+Run the installer as your normal desktop user. On Debian/Ubuntu-based systems it
+installs missing dependencies through `sudo` (or PolicyKit), including pipx,
+Python venv support, ffmpeg/ffprobe, xrandr, pactl, zenity and notification tools.
+Tray installs also include the system Python GTK and Ayatana AppIndicator bindings.
+Python casting dependencies are installed in pipx's isolated environment.
+
+On Cinnamon, installation enables the Cast panel applet, reloads it immediately,
+and checks that Cinnamon loaded it. It stays enabled at future logins. On Xfce,
+the installer starts the tray immediately and registers login autostart. Re-running
+`./install.sh all` updates both integrations without adding a second Cinnamon icon.
+Keep the checkout in place: the integrations and editable CLI link to it.
+
+Screen capture currently requires X11. For development: `python3 -m venv .venv && .venv/bin/pip install -e .`
 
 ## Desktop integration
 
@@ -32,7 +43,8 @@ anywhere (terminal, applet, Nemo) shows up everywhere, survives a panel restart,
 `linuxcast stop` ends it. Starting a new cast replaces the current one, like Windows.
 
 - Applet settings (right-click → Configure): hotkey, audio, monitor, `linuxcast` path.
-- The Xfce tray autostarts only in Xfce sessions (`OnlyShowIn=XFCE`) and keeps its
+- The tray autostarts in desktop sessions other than Cinnamon (which uses its
+  own panel applet) and keeps its
   screen/audio choices in `~/.config/linuxcast/tray.json`. It runs on the system
   Python because it needs PyGObject and AyatanaAppIndicator3.
 - Logs: `$XDG_RUNTIME_DIR/linuxcast/{applet,tray}.log`.

@@ -55,7 +55,7 @@ The UIs read `$XDG_RUNTIME_DIR/linuxcast/session.json` to show what's casting, s
 | Cinnamon | `cinnamon/linuxcast@anolis/` | Panel applet; menu built once, updated in place |
 | Xfce | `xfce/linuxcast-tray` | AyatanaAppIndicator tray + Win+K-style flyout; system Python (needs PyGObject) |
 | Nemo | `cinnamon/nemo/linuxcast.nemo_action` | "Cast to device" on media files |
-| Installer | `install.sh` | pipx install + integrations for `cinnamon`, `xfce`, `all` or `cli` |
+| Installer | `install.sh` | dependency installation + pipx + immediate/persistent integration for `cinnamon`, `xfce`/`tray`, `all` or `cli` |
 
 ## What we've done
 
@@ -129,6 +129,18 @@ The code review found and fixed these issues, on top of the uncommitted AirPlay 
 - **Documentation/tests:** README now documents DLNA, AirPlay capability limits, Miracast handoff semantics, and regression commands. `tests/test_regressions.py` supplies 15 automated regressions.
 
 Validation: all 15 tests passed under Python 3.10.12, including localhost HTTP tests and real child-process session contention. Python AST parsing (14 files), `node --check cinnamon/linuxcast@anolis/applet.js`, `bash -n install.sh`, and `git diff --check` passed. Local socket tests required execution outside the tool sandbox. All media was synthetic and receivers mocked; no TV casts, pairing, desktop reloads, installs, commits or pushes were performed during this review/fix pass.
+
+## Installer follow-up: Debian laptop with Cinnamon
+
+The user reported that `./install.sh all` did not produce a persistent icon on their Debian 13.6 Cinnamon laptop. The installer now:
+
+- Installs missing Debian/Ubuntu system dependencies using sudo or PolicyKit, including Python venv support and GTK/Ayatana bindings for tray installs. Pipx installs the Python casting dependencies and exposes the CLI in `~/.local/bin`.
+- Enables the Cinnamon applet on the first configured panel, handles an empty `@as []` applet list, advances Cinnamon's instance ID counter, and reloads already-enabled applets. It queries running applets and reports failure if the icon did not load. Enabled settings persist across logins.
+- Starts the tray immediately in graphical sessions outside Cinnamon and writes persistent autostart. Cinnamon is excluded from tray autostart to avoid duplicate icons.
+- Lets `all` proceed on systems without Cinnamon schemas; respects XDG config/data directories and quotes tray paths with spaces; surfaces dependency and startup failures instead of hiding them.
+- Has eight installer regression tests using temporary homes and mocked package managers/desktop services, including fresh Cinnamon setup, repeat installation, missing dependencies, Xfce without Cinnamon, headless setup and failure reporting.
+
+Installer tests do not install packages or alter the developer desktop. Actual installation on the user's Debian laptop still needs confirmation. The repository must remain in place because installation uses editable/symlinked files. Existing hardware validation limitations still apply.
 
 ## Current delivery
 
