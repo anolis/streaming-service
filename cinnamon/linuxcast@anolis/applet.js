@@ -138,7 +138,7 @@ class CastApplet extends Applet.IconApplet {
             this.scanning = false;
             if (out !== null) {
                 try {
-                    this.devices = JSON.parse(out).filter(d => d.castable);
+                    this.devices = JSON.parse(out).sort((x, y) => (y.castable ? 1 : 0) - (x.castable ? 1 : 0));
                     this.devicesAt = GLib.get_monotonic_time() / 1e6;
                 } catch (e) {
                     global.logError(`${UUID}: bad device JSON: ${e}`);
@@ -208,8 +208,9 @@ class CastApplet extends Applet.IconApplet {
             if (code !== 0 || !path)
                 return; // cancelled
             let args = ["play", path];
-            if (this.devices.length === 1)
-                args.push("--target", JSON.stringify(this.devices[0]));
+            let castable = this.devices.filter(d => d.castable);
+            if (castable.length === 1)
+                args.push("--target", JSON.stringify(castable[0]));
             else
                 args.push("--gui"); // let the CLI discover and show a picker
             this._launch(args);
@@ -245,59 +246,104 @@ class CastApplet extends Applet.IconApplet {
             this.set_applet_icon_symbolic_name(ICON_IDLE);
             this.set_applet_tooltip("Cast");
         }
-        this._rebuildMenu();
+        // Update in place: rebuilding the whole menu while it's open swaps out the
+        // item under the pointer and collapses the Screen submenu.
+        if (!this._built)
+            this._buildMenu();
+        this._audio.setToggleState(this.includeAudio);
+        this._syncStatus();
+        this._syncDevices();
+        this._syncScreens();
     }
 
-    _rebuildMenu() {
-        let menu = this.menu;
-        menu.removeAll();
+    _buildMenu() {
+        this._built = true;
+        this._statusSection = new PopupMenu.PopupMenuSection();
+        this.menu.addMenuItem(this._statusSection);
+
+        this.menu.addMenuItem(this._header("Mirror screen to"));
+        this._deviceSection = new PopupMenu.PopupMenuSection();
+        this.menu.addMenuItem(this._deviceSection);
+        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+
+        this._screens = new PopupMenu.PopupSubMenuMenuItem("");
+        this.menu.addMenuItem(this._screens);
+
+        this._audio = new PopupMenu.PopupSwitchMenuItem("Include desktop audio", this.includeAudio);
+        this._audio.connect("toggled", (item, on) => { this.includeAudio = on; });
+        this.menu.addMenuItem(this._audio);
+
+        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+        this.menu.addAction("Cast a media file…", () => this._castFile());
+        this.menu.addAction("Refresh devices", () => this._refreshDevices(true));
+    }
+
+    _syncStatus() {
         let s = this.state;
+        let key = s ? `${s.status}|${s.device.name}|${s.what}` : "";
+        if (key === this._statusKey)
+            return;
+        this._statusKey = key;
+        this._statusSection.removeAll();
+        if (!s)
+            return;
+        let verb = {searching: "Looking for", connecting: "Connecting to"}[s.status] || "Casting to";
+        this._statusSection.addMenuItem(this._header(`${verb} ${s.device.name}`));
+        this._statusSection.addMenuItem(new PopupMenu.PopupMenuItem(s.what, { reactive: false }));
+        this._statusSection.addAction("Stop casting", () => this._stop());
+        this._statusSection.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+    }
 
-        if (s) {
-            let verb = {searching: "Looking for", connecting: "Connecting to"}[s.status] || "Casting to";
-            menu.addMenuItem(this._header(`${verb} ${s.device.name}`));
-            menu.addMenuItem(new PopupMenu.PopupMenuItem(s.what, { reactive: false }));
-            menu.addAction("Stop casting", () => this._stop());
-            menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-        }
-
-        menu.addMenuItem(this._header("Mirror screen to"));
+    _syncDevices() {
+        let activeId = this.state ? this.state.device.id : null;
+        // "Searching…" only shows with an empty list, so a scan that finds the
+        // same devices doesn't touch the items under the pointer.
+        let key = JSON.stringify([this.devices.map(d => [d.id, d.name, d.castable]),
+                                  activeId, this.scanning && this.devices.length === 0]);
+        if (key === this._devicesKey)
+            return;
+        this._devicesKey = key;
+        let section = this._deviceSection;
+        section.removeAll();
         for (let device of this.devices) {
-            let active = s && s.device.id === device.id;
-            let item = new PopupMenu.PopupIconMenuItem(
-                active ? `${device.name}  (active)` : device.name,
-                "video-display-tv-symbolic", St.IconType.SYMBOLIC);
+            let label = device.name;
+            if (!device.castable)
+                label += `  (${device.backend}: not supported yet)`;
+            else if (device.id === activeId)
+                label += "  (active)";
+            let item = new PopupMenu.PopupIconMenuItem(label, DEVICE_ICONS[0], St.IconType.SYMBOLIC,
+                                                       { reactive: !!device.castable });
             item._icon.gicon = Gio.ThemedIcon.new_from_names(DEVICE_ICONS);
-            item.connect("activate", () => this._mirrorTo(device));
-            menu.addMenuItem(item);
+            if (device.castable)
+                item.connect("activate", () => this._mirrorTo(device));
+            section.addMenuItem(item);
         }
-        if (this.scanning)
-            menu.addMenuItem(new PopupMenu.PopupMenuItem("Searching…", { reactive: false }));
-        else if (this.devices.length === 0)
-            menu.addMenuItem(new PopupMenu.PopupMenuItem("No devices found", { reactive: false }));
+        if (this.scanning && this.devices.length === 0)
+            section.addMenuItem(new PopupMenu.PopupMenuItem("Searching…", { reactive: false }));
+        else if (!this.scanning && this.devices.length === 0)
+            section.addMenuItem(new PopupMenu.PopupMenuItem("No devices found", { reactive: false }));
+    }
 
-        menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-
-        let screens = new PopupMenu.PopupSubMenuMenuItem(`Screen: ${this._monitorLabel()}`);
-        let choices = [["", "Primary"], ...this.monitors.map(m => [m.name, `${m.name}  ${m.width}×${m.height}`])];
-        for (let [name, label] of choices) {
-            let item = new PopupMenu.PopupIndicatorMenuItem(label);
+    _syncScreens() {
+        this._screens.label.set_text(`Screen: ${this._monitorLabel()}`);
+        let key = JSON.stringify(this.monitors.map(m => [m.name, m.width, m.height]));
+        if (key !== this._monitorsKey) {
+            this._monitorsKey = key;
+            this._screens.menu.removeAll();
+            this._screenItems = [];
+            let choices = [["", "Primary"], ...this.monitors.map(m => [m.name, `${m.name}  ${m.width}×${m.height}`])];
+            for (let [name, label] of choices) {
+                let item = new PopupMenu.PopupIndicatorMenuItem(label);
+                item.connect("activate", () => {
+                    this.monitor = name;
+                    this._syncScreens();
+                });
+                this._screens.menu.addMenuItem(item);
+                this._screenItems.push([name, item]);
+            }
+        }
+        for (let [name, item] of this._screenItems)
             item.setOrnament(PopupMenu.OrnamentType.DOT, this.monitor === name);
-            item.connect("activate", () => {
-                this.monitor = name;
-                this._update();
-            });
-            screens.menu.addMenuItem(item);
-        }
-        menu.addMenuItem(screens);
-
-        let audio = new PopupMenu.PopupSwitchMenuItem("Include desktop audio", this.includeAudio);
-        audio.connect("toggled", (item, on) => { this.includeAudio = on; });
-        menu.addMenuItem(audio);
-
-        menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-        menu.addAction("Cast a media file…", () => this._castFile());
-        menu.addAction("Refresh devices", () => this._refreshDevices(true));
     }
 }
 

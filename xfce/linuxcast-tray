@@ -146,7 +146,7 @@ class CastTray(Gtk.Application):
             self.scanning = False
             if out is not None:
                 try:
-                    self.devices = [d for d in json.loads(out) if d.get("castable")]
+                    self.devices = sorted(json.loads(out), key=lambda d: not d.get("castable"))
                     self.devices_at = GLib.get_monotonic_time() / 1e6
                 except ValueError:
                     pass
@@ -190,8 +190,9 @@ class CastTray(Gtk.Application):
         dialog.add_filter(media)
         if dialog.run() == Gtk.ResponseType.ACCEPT:
             args = ["play", dialog.get_filename()]
-            if len(self.devices) == 1:
-                args += ["--target", json.dumps(self.devices[0])]
+            castable = [d for d in self.devices if d.get("castable")]
+            if len(castable) == 1:
+                args += ["--target", json.dumps(castable[0])]
             else:
                 args.append("--gui")
             self.launch(args)
@@ -229,7 +230,16 @@ class CastTray(Gtk.Application):
             return
         self.indicator.set_icon_full(ICON_ACTIVE if self.state else ICON_IDLE, "Cast")
         self.indicator.set_title(self.status_text() or "Cast")
-        self.indicator.set_menu(self._build_menu())
+        # Replacing the menu closes it if it's open, so only do it when
+        # something visible changed (a scan finding the same devices doesn't).
+        s = self.state
+        key = json.dumps([s and [s["status"], s["what"], s["device"]["id"]],
+                          [[d["id"], d["name"], d.get("castable")] for d in self.devices],
+                          self.scanning and not self.devices, self.monitors,
+                          self.prefs.monitor, self.prefs.audio])
+        if key != getattr(self, "_menu_key", None):
+            self._menu_key = key
+            self.indicator.set_menu(self._build_menu())
         if self.flyout:
             self.flyout.refresh()
 
@@ -253,6 +263,9 @@ class CastTray(Gtk.Application):
         item("Mirror screen to:", sensitive=False)
         active_id = self.state["device"]["id"] if self.state else None
         for d in self.devices:
+            if not d.get("castable"):
+                item(f"    {d['name']}  ({d['backend']}: not supported yet)", sensitive=False)
+                continue
             label = f"    {d['name']}" + ("  (active)" if d["id"] == active_id else "")
             item(label, lambda d=d: self.mirror_to(d))
         if self.scanning:
@@ -340,7 +353,8 @@ class Flyout(Gtk.Window):
             self.box.pack_start(Gtk.Separator(), False, False, 4)
         self._label("Cast to a device", bold=True)
         for d in app.devices:
-            self._button(d["name"], lambda d=d: app.mirror_to(d), DEVICE_ICONS)
+            if d.get("castable"):
+                self._button(d["name"], lambda d=d: app.mirror_to(d), DEVICE_ICONS)
         if app.scanning:
             self._label("Searching…")
         elif not app.devices:
