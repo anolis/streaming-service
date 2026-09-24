@@ -7,8 +7,15 @@ discover Devices and start Sessions on them. The CLI only talks to this layer.
 from __future__ import annotations
 
 import abc
+import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
+
+
+def log(msg: str) -> None:
+    """Session events go to stderr, which the desktop integrations keep as a log."""
+    print(f"[{time.strftime('%H:%M:%S')}] {msg}", file=sys.stderr, flush=True)
 
 
 @dataclass(frozen=True)

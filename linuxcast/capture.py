@@ -130,7 +130,8 @@ def _clean(cmd: list[str]) -> list[str]:
     return out
 
 
-def screen_command(opts: CaptureOptions, outdir: Path) -> list[str]:
+def _screen_capture(opts: CaptureOptions) -> list[str]:
+    """ffmpeg inputs + encoding for the screen; callers append an output."""
     if os.environ.get("XDG_SESSION_TYPE") == "wayland":
         raise RuntimeError("screen capture currently uses x11grab; log into an X11 session")
     mon = pick_monitor(opts.monitor)
@@ -146,7 +147,22 @@ def screen_command(opts: CaptureOptions, outdir: Path) -> list[str]:
     # aresample async smooths PulseAudio's jittery capture timestamps
     audio = ["-af", "aresample=async=1000", "-c:a", "aac", "-b:a", "160k", "-ar", "48000"]
     cmd += audio if opts.audio else ["-an"]
-    return _clean(cmd + _hls_output(outdir, live=True))
+    return cmd
+
+
+def screen_command(opts: CaptureOptions, outdir: Path) -> list[str]:
+    """Screen as live HLS in outdir (Chromecast)."""
+    return _clean(_screen_capture(opts) + _hls_output(outdir, live=True))
+
+
+def screen_ts_command(opts: CaptureOptions) -> list[str]:
+    """Screen as one continuous MPEG-TS stream on stdout (DLNA renderers)."""
+    # Receivers may (re)connect mid-stream, so repeat SPS/PPS before every keyframe
+    # and the PAT/PMT tables often; otherwise a late joiner can never decode.
+    return _clean(_screen_capture(opts) + [
+        "-bsf:v", "dump_extra=freq=keyframe",
+        "-f", "mpegts", "-mpegts_flags", "resend_headers", "-pat_period", "0.2",
+        "-muxdelay", "0", "-flush_packets", "1", "pipe:1"])
 
 
 def transcode_command(src: str, outdir: Path, encoder: str = "auto") -> list[str]:

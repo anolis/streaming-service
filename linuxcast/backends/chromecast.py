@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import mimetypes
 import shutil
-import sys
 import tempfile
 import threading
 import time
@@ -18,7 +17,7 @@ import uuid
 from pathlib import Path
 
 from linuxcast import capture
-from linuxcast.base import Backend, BackendUnavailable, CaptureOptions, Device, Session
+from linuxcast.base import Backend, BackendUnavailable, CaptureOptions, Device, Session, log
 from linuxcast.httpserver import MediaServer, local_ip_for
 
 try:
@@ -151,10 +150,6 @@ class ChromecastBackend(Backend):
         cast.disconnect(timeout=3)
 
 
-def _log(msg):
-    print(f"[{time.strftime('%H:%M:%S')}] {msg}", file=sys.stderr, flush=True)
-
-
 class CastSession(Session, MediaStatusListener):
     IDLE_GRACE_S = 15
 
@@ -190,7 +185,7 @@ class CastSession(Session, MediaStatusListener):
             self._last_state = status.player_state
             lag = self._lag(status)
             why = f" [{status.idle_reason}]" if status.idle_reason else ""
-            _log(f"receiver {status.player_state}{why}" + (f" (lag {lag:.1f}s)" if lag is not None else ""))
+            log(f"receiver {status.player_state}{why}" + (f" (lag {lag:.1f}s)" if lag is not None else ""))
         if self._media_session is None:
             return
         if status.media_session_id not in (None, self._media_session):
