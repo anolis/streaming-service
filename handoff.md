@@ -237,3 +237,7 @@ LINUXCAST_DEBUG=1 linuxcast ...      # ffmpeg command + every HTTP request
 - `.github/workflows/pages.yml` deploys only `site/` on matching main-branch changes or manual dispatch. Never upload the repository root: the handoff and application sources are not website assets.
 - Desktop and mobile layouts checked in Chrome; JavaScript syntax and diff whitespace checks passed.
 - Publishing is currently blocked: GitHub's Pages creation API returned HTTP 422, “Your current plan does not support GitHub Pages for this repository.” The application repository is private. A separate public website-only repository or a qualifying GitHub plan is needed; do not change application repository visibility without explicit authorization.
+
+## Open-source publication (2026-09-25)
+
+The user authorized making linuxcast open source. Added the MIT license and package metadata, removed private-access wording from the website, and authorized public visibility for `anolis/streaming-service`. This supersedes the private-repository Pages blocker above. Website deployment uses the existing Pages workflow and publishes only `site/`. The unfinished native AirPlay changes remain uncommitted and are not part of this release.

@@ -6,6 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "linuxcast"
 version = "0.1.0"
 description = "Windows-style 'Cast to device' for Linux: Chromecast, DLNA, AirPlay, and a Miracast handoff"
+license = {file = "LICENSE"}
 requires-python = ">=3.10"
 dependencies = ["pychromecast>=13", "pyatv>=0.14"]
 

@@ -56,7 +56,7 @@
   <div class="settings-card"><div class="card-heading"><span>MIRRORING DEFAULTS</span><span>↗</span></div><div class="setting"><span>Output resolution<small>480p to 2160p</small></span><strong>1080p</strong></div><div class="setting"><span>Target frame rate<small>15 / 24 / 30 / 60 fps presets</small></span><strong>30 <small>fps</small></strong></div><div class="setting"><span>HLS playback buffer<small>2–20 seconds</small></span><strong>8 <small>sec</small></strong></div><div class="settings-footer">Higher quality asks more of your encoder and receiver.</div></div>
 </section>
 <section class="install section" id="install"><div class="wrap install-grid">
-  <div><p class="eyebrow">FROM TERMINAL TO TELEVISION</p><h2>Ready when<br>you are.</h2><p>Run the installer as your normal desktop user. On Debian and Ubuntu-based systems, it installs missing dependencies and enables your desktop integration.</p><p class="install-note">The repository is currently private. You’ll need repository access to clone it. Keep the checkout in place after installation.</p></div>
+  <div><p class="eyebrow">FROM TERMINAL TO TELEVISION</p><h2>Ready when<br>you are.</h2><p>Run the installer as your normal desktop user. On Debian and Ubuntu-based systems, it installs missing dependencies and enables your desktop integration.</p><p class="install-note">Open source under the MIT license. Keep the checkout in place after installation.</p></div>
   <div class="terminal"><div class="terminal-bar"><span><i></i><i></i><i></i></span><span>INSTALL / LINUX</span><button class="copy" type="button" data-copy="install-command">Copy commands</button></div><pre><code id="install-command">git clone https://github.com/anolis/streaming-service.git
 cd streaming-service
 ./install.sh all</code></pre><div class="terminal-divider"></div><p class="terminal-comment"># Then find a device and start casting</p><pre><code>~/.local/bin/linuxcast devices
@@ -67,10 +67,10 @@ cd streaming-service
 <details><summary>Is this suitable for gaming?</summary><p>Chromecast mirroring uses HLS and deliberately keeps a playback cushion. Its default delay is around 10 seconds, so it suits watching and presenting better than interactive gaming. The native AirPlay work aims to provide another transport, but measured latency is not yet available.</p></details>
 <details><summary>Why isn’t my TV appearing?</summary><p>Make sure the computer and receiver are on the same reachable local network, enable casting on the TV, and refresh the device list. Network isolation can block discovery. HTTP-based casting also needs the TV to reach a randomly selected port on your computer.</p></details>
 <details><summary>Does every AirPlay TV support video URLs?</summary><p>No. Pairing and URL-video support are separate capabilities. The tested Samsung rejects URL playback, which is why native screen mirroring is being developed as a separate backend.</p></details>
-<details><summary>Where can I report a problem?</summary><p>Use the <a href="https://github.com/anolis/streaming-service/issues">repository’s issue tracker</a> if you have access. Include your Linux distribution, desktop, receiver model, protocol, and the error message. Avoid posting pairing credentials or private media.</p></details>
+<details><summary>Where can I report a problem?</summary><p>Use the <a href="https://github.com/anolis/streaming-service/issues">repository’s issue tracker</a>. Include your Linux distribution, desktop, receiver model, protocol, and the error message. Avoid posting pairing credentials or private media.</p></details>
 </div></section>
 </main>
-<footer class="wrap"><a class="brand" href="#"><img src="icon.svg" alt="" width="24" height="24">linuxcast</a><p>Made for the screen you already have.</p><a href="https://github.com/anolis/streaming-service">Project on GitHub ↗</a></footer>
+<footer class="wrap"><a class="brand" href="#"><img src="icon.svg" alt="" width="24" height="24">linuxcast</a><p>Made for the screen you already have.</p><a href="https://github.com/anolis/streaming-service">Open source on GitHub ↗</a></footer>
 <div id="copy-status" class="sr-only" role="status" aria-live="polite"></div>
 </body>
 </html>

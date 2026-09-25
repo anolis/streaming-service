@@ -135,3 +135,9 @@ The regression suite uses mocked receivers, temporary files, child processes,
 and HTTP servers bound to localhost. It does not cast to real devices. A test
 environment must permit local sockets. Hardware playback and desktop UI rendering
 still require separate checks.
+
+## License
+
+linuxcast is available under the [MIT license](LICENSE). Third-party dependencies retain their own licenses.
+
+Project website: https://anolis.github.io/streaming-service/
