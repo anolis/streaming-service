@@ -230,3 +230,10 @@ LINUXCAST_DEBUG=1 linuxcast ...      # ffmpeg command + every HTTP request
 - Applet dev loop: edit `cinnamon/linuxcast@anolis/applet.js` (symlinked into `~/.local/share/cinnamon/applets`), then reload with `gdbus call --session --dest org.Cinnamon --object-path /org/Cinnamon --method org.Cinnamon.ReloadXlet 'linuxcast@anolis' 'APPLET'`. Inspect it live with `org.Cinnamon.Eval`.
 - Test harnesses (session scratchpad, not in the repo) injected HTTP stalls, logged receiver state per second, and measured lag from the playlist's live edge. Rebuild them if needed; they were the only way to reproduce the buffering bugs.
 - Gotchas: `pkill -f <pattern>` can kill the shell that runs it, so select by exact PID. Casting takes over the user's TV, so ask before long tests. Short test casts that start within ~4 s of capture start have no audio/video yet.
+
+## GitHub Pages website (2026-09-25)
+
+- Standalone responsive website lives in `site/`: installation, receiver support, mirroring settings, and troubleshooting. No build dependencies or external assets. Native AirPlay is explicitly a development preview.
+- `.github/workflows/pages.yml` deploys only `site/` on matching main-branch changes or manual dispatch. Never upload the repository root: the handoff and application sources are not website assets.
+- Desktop and mobile layouts checked in Chrome; JavaScript syntax and diff whitespace checks passed.
+- Publishing is currently blocked: GitHub's Pages creation API returned HTTP 422, “Your current plan does not support GitHub Pages for this repository.” The application repository is private. A separate public website-only repository or a qualifying GitHub plan is needed; do not change application repository visibility without explicit authorization.
