@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import signal
 import subprocess
@@ -67,12 +68,17 @@ def choose_device(args, *, castable=True) -> Device:
         fields = json.loads(args.target)
         fields.pop("castable", None)
         fields.pop("unsupported", None)
+        fields.pop("can_play", None)
         device = Device(**fields)
+        if getattr(args, "cmd", None) == "play" and not BACKENDS[device.backend].can_play:
+            raise Failure(f"{device.backend} supports screen mirroring only")
         if castable and (reason := BACKENDS[device.backend].unsupported_reason(device)):
             raise Failure(f"{device.name}: {reason}")
         return device
     def find(timeout):
         devices = discover_all(args.backend and [args.backend], timeout)
+        if getattr(args, "cmd", None) == "play":
+            devices = [d for d in devices if BACKENDS[d.backend].can_play]
         if castable:
             devices = [d for d in devices if not BACKENDS[d.backend].unsupported_reason(d)]
         if not args.device:
@@ -138,7 +144,7 @@ def cmd_devices(args):
         rows = []
         for d in devices:
             reason = BACKENDS[d.backend].unsupported_reason(d)
-            rows.append(asdict(d) | {"castable": not reason, "unsupported": reason})
+            rows.append(asdict(d) | {"castable": not reason, "unsupported": reason, "can_play": BACKENDS[d.backend].can_play})
         print(json.dumps(rows))
         return
     if not devices:
@@ -180,8 +186,11 @@ def cmd_mirror(args):
         return
     opts = CaptureOptions(monitor=args.monitor, audio=not args.no_audio, fps=args.fps,
                           bitrate=args.bitrate, encoder=args.encoder,
-                          resolution=args.resolution, buffer_seconds=args.buffer_seconds)
-    mon = capture.pick_monitor(args.monitor).name
+                          resolution=args.resolution, buffer_seconds=args.buffer_seconds,
+                          airplay_latency_ms=args.airplay_latency_ms)
+    mon = ("portal selection" if args.backend == "airplay-native" and
+           os.environ.get("XDG_SESSION_TYPE") == "wayland"
+           else capture.pick_monitor(args.monitor).name)
     run_session(args, "mirror", f"Screen {mon} · {opts.resolution} · {opts.fps} fps", lambda b, device: b.mirror(device, opts))
 
 
@@ -264,6 +273,8 @@ def main(argv=None):
     m.add_argument("--buffer", "--buffer-seconds", dest="buffer_seconds", type=int,
                    choices=range(2, 21), metavar="2-20", default=8,
                    help="Chromecast/AirPlay playback buffer in seconds; lower reduces delay but may stutter (default: 8; DLNA buffering is receiver-controlled)")
+    m.add_argument("--airplay-latency-ms", type=int, choices=range(0, 2001),
+                   metavar="0-2000", default=0, help="native AirPlay playout latency; 0 = automatic")
     m.add_argument("--bitrate", default="8M", help="max video bitrate (default 8M)")
     m.add_argument("--encoder", choices=["auto", "nvenc", "vaapi", "x264"], default="auto")
 

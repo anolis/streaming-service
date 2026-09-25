@@ -24,13 +24,14 @@ class InstallerTests(unittest.TestCase):
         self.repo.mkdir()
         self.home.mkdir()
         self.bin.mkdir()
-        for name in ('install.sh', 'cinnamon', 'xfce'):
+        for name in ('install.sh', 'cinnamon', 'xfce', 'tools'):
             src, dst = REPO / name, self.repo / name
             if src.is_dir():
                 shutil.copytree(src, dst)
             else:
                 shutil.copy2(src, dst)
         (self.repo / 'xfce/linuxcast-tray').write_text('#!/bin/sh\necho tray-start >> "$INSTALL_TEST_LOG"\n')
+        (self.repo / 'tools/build-airplay-native.sh').write_text('#!/bin/sh\necho native-build >> "$INSTALL_TEST_LOG"\n')
         self.log = root / 'commands.log'
         self.settings = root / 'settings.json'
         self.settings.write_text(json.dumps({'enabled-applets': '@as []',
@@ -149,3 +150,14 @@ elif name == 'xfconf-query':
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn('next login', r.stdout)
         self.assertNotIn('tray-start', self.commands())
+
+    def test_native_airplay_installs_dependencies_and_builds_engine(self):
+        r = self.run_installer('airplay')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        commands = self.commands()
+        self.assertIn('golang-go', commands)
+        self.assertIn('curl', commands)
+        self.assertIn('ca-certificates', commands)
+        self.assertIn('gstreamer1.0-plugins-ugly', commands)
+        self.assertIn('native-build', commands)
+        self.assertNotIn('org.Cinnamon.ReloadXlet', commands)

@@ -213,7 +213,7 @@ class CastApplet extends Applet.IconApplet {
             if (code !== 0 || !path)
                 return; // cancelled
             let args = ["play", path];
-            let castable = this.devices.filter(d => d.castable);
+            let castable = this.devices.filter(d => d.castable && d.can_play !== false);
             if (castable.length === 1)
                 args.push("--target", JSON.stringify(castable[0]));
             else

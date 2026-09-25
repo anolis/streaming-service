@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Install dependencies, CLI, and persistent desktop integration for this user.
-# ./install.sh [all|cinnamon|xfce|tray|cli] (default: current desktop)
+# ./install.sh [all|cinnamon|xfce|tray|cli|airplay] (default: current desktop)
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")" && pwd)"
@@ -18,7 +18,7 @@ case "$target" in
             *cinnamon*) target=cinnamon ;;
             *) target=tray ;;
         esac ;;
-    all|cinnamon|xfce|tray|cli) ;;
+    all|cinnamon|xfce|tray|cli|airplay) ;;
     *) echo "unknown target: $target" >&2; exit 2 ;;
 esac
 
@@ -39,7 +39,13 @@ install_dependencies() {
     if ! /usr/bin/python3 -c 'import venv, ensurepip' 2>/dev/null; then
         packages+=(python3-venv)
     fi
-    if [[ "$target" != cli && "$target" != cinnamon ]]; then
+    if [[ "$target" == airplay ]]; then
+        packages+=(git curl ca-certificates golang-go gstreamer1.0-tools gstreamer1.0-x
+                   gstreamer1.0-plugins-base gstreamer1.0-plugins-good
+                   gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly
+                   gstreamer1.0-libav gstreamer1.0-pipewire)
+    fi
+    if [[ "$target" != cli && "$target" != cinnamon && "$target" != airplay ]]; then
         if ! /usr/bin/python3 -c 'import gi; gi.require_version("Gtk", "3.0"); gi.require_version("AyatanaAppIndicator3", "0.1"); from gi.repository import Gtk, AyatanaAppIndicator3' 2>/dev/null; then
             packages+=(python3-gi gir1.2-gtk-3.0 gir1.2-ayatanaappindicator3-0.1)
         fi
@@ -190,5 +196,6 @@ case "$target" in
         start_tray ;;
     all) install_cinnamon; install_tray; install_nemo_action; start_tray ;;
     cli) ;;
+    airplay) "$REPO/tools/build-airplay-native.sh" ;;
 esac
 echo "done"

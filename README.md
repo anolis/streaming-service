@@ -7,7 +7,8 @@ Windows-style "Cast to device" for Linux. Pluggable per-protocol backends:
 | Chromecast | working: mirror + files/URLs | ffmpeg → HLS served over LAN → Default Media Receiver |
 | Miracast   | hand-off | needs a Wi-Fi Direct capable card; launches GNOME Network Displays |
 | DLNA       | mirror + files/URLs | ffmpeg → continuous MPEG-TS for mirroring; files served as-is |
-| AirPlay    | pairing + video backend; compatible receiver playback unverified | pyatv; URL playback and HLS mirroring on video-capable receivers |
+| AirPlay native | experimental; Samsung desktop + audio confirmed | pinned Doubletake engine → native encrypted mirroring |
+| AirPlay URL | pairing + video backend; compatible receiver playback unverified | pyatv; URL playback and HLS mirroring on video-capable receivers |
 
 ## Setup
 
@@ -90,8 +91,9 @@ linuxcast mirror --resolution 720p --fps 30 --buffer 4
 
 Resolution and frame rate apply to Chromecast, DLNA and compatible AirPlay screen
 mirroring. DLNA buffering is controlled by the TV; the playback-buffer option has
-no effect there. These settings do not change file playback or the external
-GNOME Network Displays handoff.
+no effect there. The native AirPlay backend uses resolution/frame rate too, but has a separate
+millisecond playout setting described below. These settings do not change file
+playback or the external GNOME Network Displays handoff.
 
 ## Notes
 
@@ -117,11 +119,41 @@ receiver and stop the session in GNOME Network Displays; these sessions are not
 tracked by `linuxcast status` or controlled by `linuxcast stop`. Native Miracast
 peer discovery and streaming are not implemented.
 
-AirPlay receivers without URL-video support are listed with a reason and cannot
-be selected for video casting. Pairing is still allowed. The tested Samsung is
-in this category; successful pairing does not enable AirPlay video on it.
-DLNA is its working video route. File casts through DLNA and AirPlay expose only
-the registered media file, not its containing directory.
+AirPlay URL playback and native screen mirroring are different protocols. The
+Samsung rejects URL-video playback but **has displayed the desktop with audio**
+using the experimental native backend. DLNA remains its established file path.
+File casts through DLNA and AirPlay URL playback expose only the registered file.
+
+## Experimental native AirPlay
+
+```sh
+./install.sh airplay
+linuxcast mirror -b airplay-native -d living --resolution 720p --fps 30
+linuxcast stop
+```
+
+This explicit install builds a pinned [Doubletake](https://github.com/omarroth/doubletake)
+engine and installs the Go/GStreamer dependencies on Debian/Ubuntu. It does not
+replace the existing `airplay` URL backend. The desktop menus list a separate
+"(native AirPlay)" device; refresh discovery after installation.
+
+Pairing occurs on the first cast: enter the TV's current PIN/password in the
+terminal or desktop dialog. Native credentials are saved separately in
+`~/.config/linuxcast/native-airplay.json`; prior pyatv pairing is not reused.
+`linuxcast pair -b airplay-native -d living` can pair without starting capture.
+
+Native mirroring uses automatic low-latency timing. The HLS `--buffer` setting
+has no effect here; use `--airplay-latency-ms 100` to request a millisecond playout
+override (0 means automatic). The receiver may add latency. Selected resolution
+must fit its negotiated canvas. X11 uses the selected monitor; on Wayland the
+native sender uses the screen-sharing portal (hardware validation pending).
+
+This is experimental. A 20-second 720p/30 fps X11 desktop cast with desktop audio
+was confirmed on a Samsung AU8000 from Debian 13. Other receivers, Wayland,
+long sessions, audio/video synchronization and measured latency still need validation. The default
+build supports ALAC audio; AAC-ELD-only receivers require optional engine support
+and are not covered by this installer. Use `--no-audio` to isolate video.
+See [engine provenance, build and protocol tests](tools/airplay-native/README.md).
 
 ## Development checks
 

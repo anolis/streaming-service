@@ -42,6 +42,7 @@ class BackendUnavailable(RuntimeError):
 
 class Backend(abc.ABC):
     name: str = ""
+    can_play: bool = True
     can_cast: bool = True  # False for discovery-only backends
 
     @abc.abstractmethod
@@ -96,7 +97,11 @@ class CaptureOptions:
     resolution: str = "1080p"
     buffer_seconds: int = 8        # HLS playback offset, not encoder VBV size
 
+    airplay_latency_ms: int = 0    # native protocol playout override; zero = automatic
+
     def __post_init__(self):
+        if not 0 <= self.airplay_latency_ms <= 2000:
+            raise ValueError("native AirPlay latency must be between 0 and 2000 ms")
         if self.resolution not in RESOLUTIONS:
             raise ValueError(f"unsupported output resolution: {self.resolution}")
         if not 1 <= self.fps <= 60:

@@ -1,0 +1,289 @@
+diff --git a/cmd/doubletake/main.go b/cmd/doubletake/main.go
+index b49aab6..24ebf10 100644
+--- a/cmd/doubletake/main.go
++++ b/cmd/doubletake/main.go
+@@ -3,6 +3,7 @@ package main
+ import (
+ 	"bufio"
+ 	"context"
++	"encoding/json"
+ 	"errors"
+ 	"flag"
+ 	"fmt"
+@@ -57,6 +58,17 @@ func parsePortRange(s string) (int, int, error) {
+ 	return lo, hi, nil
+ }
+ 
++// linuxcast integration uses newline-delimited, non-secret status events.
++var linuxcastEvents = flag.Bool("linuxcast-events", false, "Emit linuxcast lifecycle events")
++
++func linuxcastEvent(kind, prompt string) {
++	if !*linuxcastEvents {
++		return
++	}
++	data, _ := json.Marshal(map[string]string{"type": kind, "prompt": prompt})
++	fmt.Fprintf(os.Stderr, "LINUXCAST_EVENT %s\n", data)
++}
++
+ func main() {
+ 	target := flag.String("target", "", "Apple TV IP address or hostname (skip discovery)")
+ 	port := flag.Int("port", 7000, "AirPlay port")
+@@ -80,7 +92,25 @@ func main() {
+ 	x11WindowID := flag.String("x11-window-id", "", "X11 window id to capture, decimal or 0xhex")
+ 	x11WindowName := flag.String("x11-window-name", "", "X11 window name to capture; prefer -x11-window-id")
+ 	noCursor := flag.Bool("no-cursor", false, "Don't show the mouse cursor in the captured video")
++	outputWidth := flag.Int("output-width", 0, "Requested output width (zero = receiver canvas)")
++	outputHeight := flag.Int("output-height", 0, "Requested output height")
++	cropX := flag.Int("crop-x", 0, "X11 capture rectangle left")
++	cropY := flag.Int("crop-y", 0, "X11 capture rectangle top")
++	cropWidth := flag.Int("crop-width", 0, "X11 capture rectangle width")
++	cropHeight := flag.Int("crop-height", 0, "X11 capture rectangle height")
++	pairOnly := flag.Bool("pair-only", false, "Pair without starting capture")
++	bridgeVersion := flag.Bool("linuxcast-version", false, "Print linuxcast integration version")
+ 	flag.Parse()
++	if *bridgeVersion {
++		fmt.Println("linuxcast-airplay/1 ae067228d76df011375164814b729932ed55ca2f")
++		return
++	}
++	if (*outputWidth == 0) != (*outputHeight == 0) || *outputWidth < 0 || *outputHeight < 0 || *outputWidth%2 != 0 || *outputHeight%2 != 0 {
++		log.Fatal("output dimensions must be a pair of positive even values or both zero")
++	}
++	if (*cropWidth == 0) != (*cropHeight == 0) || *cropWidth < 0 || *cropHeight < 0 || *cropX < 0 || *cropY < 0 {
++		log.Fatal("invalid capture rectangle")
++	}
+ 	if err := airplay.ValidateHWAccel(*hwaccel); err != nil {
+ 		log.Fatalf("invalid -hwaccel: %v", err)
+ 	}
+@@ -309,6 +339,10 @@ func main() {
+ 		}
+ 	}
+ 	log.Println("pairing complete")
++	linuxcastEvent("paired", "")
++	if *pairOnly {
++		return
++	}
+ 
+ 	// FairPlay setup — establishes fp-setup state and ekey/eiv used for the
+ 	// final encrypted mirror stream. Pair-verify and FairPlay are both needed
+@@ -346,6 +380,7 @@ func main() {
+ 		X11WindowID:   xid,
+ 		X11WindowName: *x11WindowName,
+ 		ShowCursor:    !*noCursor,
++		CropX:         *cropX, CropY: *cropY, CropWidth: *cropWidth, CropHeight: *cropHeight,
+ 	}
+ 	var capturePreparation *airplay.CapturePreparation
+ 	if *testMode {
+@@ -388,6 +423,12 @@ func main() {
+ 			}
+ 			return airplay.VideoPreparationResult{}, fmt.Errorf("receiver changed video from %s %dx%d to %s %dx%d during setup", startedCodec, startedWidth, startedHeight, codec, width, height)
+ 		}
++		if *outputWidth > 0 {
++			if *outputWidth > width || *outputHeight > height {
++				return airplay.VideoPreparationResult{}, fmt.Errorf("requested %dx%d exceeds negotiated receiver canvas %dx%d; select a lower resolution", *outputWidth, *outputHeight, width, height)
++			}
++			width, height = *outputWidth, *outputHeight
++		}
+ 		startedCapture, startErr := capturePreparation.StartWithCodec(width, height, codec)
+ 		if startErr != nil {
+ 			return airplay.VideoPreparationResult{}, startErr
+@@ -448,6 +489,7 @@ func main() {
+ 	}
+ 	defer session.Close()
+ 	log.Printf("mirror session ready (data port: %d)", session.DataPort)
++	linuxcastEvent("ready", "")
+ 
+ 	go func() {
+ 		<-ctx.Done()
+@@ -499,6 +541,11 @@ func credentialOrPrompt(value string, client *airplay.AirPlayClient, expectPIN b
+ 	if displayErr != nil {
+ 		log.Printf("warning: failed to trigger PIN display: %v", displayErr)
+ 	}
++	if expectPIN && displayErr == nil {
++		if err := client.PreparePINPairing(context.Background()); err != nil {
++			log.Fatalf("prepare PIN challenge: %v", err)
++		}
++	}
+ 	credential := readCredential(reader, pairingCredentialPrompt(expectPIN, displayErr))
+ 	if credential == "" {
+ 		log.Fatal("pairing credential cannot be empty")
+@@ -531,7 +578,11 @@ func forcePairUsesTransient(info *airplay.ReceiverInfo) bool {
+ }
+ 
+ func readCredential(reader *bufio.Reader, prompt string) string {
+-	fmt.Print(prompt)
++	if *linuxcastEvents {
++		linuxcastEvent("credential", prompt)
++	} else {
++		fmt.Print(prompt)
++	}
+ 	// Read the whole line rather than using fmt.Scanln, which stops at the
+ 	// first space and would silently truncate a password containing one.
+ 	line, err := reader.ReadString('\n')
+diff --git a/internal/airplay/capture.go b/internal/airplay/capture.go
+index 5aaf46b..1922954 100644
+--- a/internal/airplay/capture.go
++++ b/internal/airplay/capture.go
+@@ -2,6 +2,7 @@ package airplay
+ 
+ import (
+ 	"bufio"
++	"bytes"
+ 	"context"
+ 	"fmt"
+ 	"io"
+@@ -32,8 +33,9 @@ type CaptureConfig struct {
+ 	MaxWidth  int
+ 	MaxHeight int
+ 
+-	X11WindowID   uint64
+-	X11WindowName string
++	CropX, CropY, CropWidth, CropHeight int // linuxcast selected X11 monitor
++	X11WindowID                         uint64
++	X11WindowName                       string
+ 
+ 	ShowCursor bool // show the mouse cursor in the captured video (Wayland and X11)
+ 
+@@ -944,7 +946,12 @@ func startPreparedX11Capture(ctx context.Context, cfg CaptureConfig, encoder enc
+ 		fmt.Sprintf("show-pointer=%t", cfg.ShowCursor),
+ 	}
+ 
+-	if cfg.X11WindowID != 0 {
++	if cfg.CropWidth > 0 && cfg.CropHeight > 0 {
++		ximageSrcArgs = append(ximageSrcArgs,
++			fmt.Sprintf("startx=%d", cfg.CropX), fmt.Sprintf("starty=%d", cfg.CropY),
++			fmt.Sprintf("endx=%d", cfg.CropX+cfg.CropWidth-1),
++			fmt.Sprintf("endy=%d", cfg.CropY+cfg.CropHeight-1))
++	} else if cfg.X11WindowID != 0 {
+ 		ximageSrcArgs = append(ximageSrcArgs, fmt.Sprintf("xid=%d", cfg.X11WindowID))
+ 		dbg("[CAPTURE] capturing X11 window xid=0x%x", cfg.X11WindowID)
+ 	} else if cfg.X11WindowName != "" {
+@@ -1160,7 +1167,34 @@ func parseXrandrGeometry(line string) (xOffset, yOffset, width, height int, ok b
+ // fall through the priority list; an explicit method either uses its own
+ // encoder element (or elements, for NVENC) or returns an error.
+ func detectGstEncoder(cfg CaptureConfig) (encoderResult, error) {
+-	return selectGstEncoderWithProbe(cfg, hasGstElement, true)
++	rejected := map[string]bool{}
++	for {
++		encoder, err := selectGstEncoderWithProbe(cfg, func(name string) bool {
++			return !rejected[name] && hasGstElement(name)
++		}, true)
++		if err != nil {
++			return encoderResult{}, err
++		}
++		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
++		args := buildGstVideoPipeline(gstStage{"videotestsrc", "num-buffers=2"},
++			[]gstStage{{"video/x-raw,width=256,height=256,framerate=30/1"}}, nil,
++			encoder, 256, 256, false)
++		cmd := exec.CommandContext(ctx, "gst-launch-1.0", args...)
++		cmd.Stdout = io.Discard
++		var errors bytes.Buffer
++		cmd.Stderr = &errors
++		probeErr := cmd.Run()
++		detail := errors.Bytes()
++		cancel()
++		if probeErr == nil {
++			return encoder, nil
++		}
++		if cfg.HWAccel != "" && cfg.HWAccel != "auto" {
++			return encoderResult{}, fmt.Errorf("encoder %s initialization failed: %v %s", encoder.parts[0], probeErr, detail)
++		}
++		log.Printf("[CAPTURE] encoder %s failed initialization; trying fallback: %v %s", encoder.parts[0], probeErr, detail)
++		rejected[encoder.parts[0]] = true
++	}
+ }
+ 
+ func detectGstEncoderWithProbe(cfg CaptureConfig, hasElement func(string) bool) (encoderResult, error) {
+@@ -1424,7 +1458,7 @@ func logStderr(prefix string, r io.Reader) {
+ 	buf := make([]byte, 0, 64*1024)
+ 	scanner.Buffer(buf, 1024*1024)
+ 	for scanner.Scan() {
+-		dbg("[%s] %s", prefix, scanner.Text())
++		log.Printf("[%s] %s", prefix, scanner.Text())
+ 	}
+ 	if err := scanner.Err(); err != nil {
+ 		dbg("[%s] stderr read error: %v", prefix, err)
+diff --git a/internal/airplay/client.go b/internal/airplay/client.go
+index cd35c0e..c93c6ed 100644
+--- a/internal/airplay/client.go
++++ b/internal/airplay/client.go
+@@ -263,8 +263,9 @@ func (e *CredentialsRequiredError) Is(target error) bool {
+ 
+ // AirPlayClient manages the connection to an AirPlay receiver.
+ type AirPlayClient struct {
+-	host string
+-	port int
++	pendingPINSetup map[byte][]byte // challenge acquired before asking for its PIN
++	host            string
++	port            int
+ 	// advertisement is the optional mDNS snapshot used only to fill fields
+ 	// omitted by /info. Explicit /info values always take precedence.
+ 	advertisement *AirPlayDevice
+diff --git a/internal/airplay/pairing.go b/internal/airplay/pairing.go
+index 8384997..862d7ed 100644
+--- a/internal/airplay/pairing.go
++++ b/internal/airplay/pairing.go
+@@ -411,8 +411,9 @@ func (c *AirPlayClient) performPairSetupAndVerify(ctx context.Context, pin strin
+ 	return nil
+ }
+ 
+-// pairSetup implements the SRP6a pair-setup exchange (PIN-based).
+-func (c *AirPlayClient) pairSetup(ctx context.Context, pin string) error {
++// PreparePINPairing obtains M2 before a UI prompts for the PIN. Receivers can
++// refresh their onscreen PIN when M1 is accepted; reuse that exact challenge.
++func (c *AirPlayClient) PreparePINPairing(ctx context.Context) error {
+ 	// M1: Send pairing method + state
+ 	m1 := tlv8EncodeOrdered([]tlv8Item{
+ 		{Tag: tlvMethod, Value: []byte{0x00}},
+@@ -425,6 +426,21 @@ func (c *AirPlayClient) pairSetup(ctx context.Context, pin string) error {
+ 	if err != nil {
+ 		return err
+ 	}
++	c.pendingPINSetup = m2
++	return nil
++}
++
++// pairSetup implements the SRP6a pair-setup exchange (PIN-based).
++func (c *AirPlayClient) pairSetup(ctx context.Context, pin string) error {
++	m2 := c.pendingPINSetup
++	c.pendingPINSetup = nil
++	if m2 == nil {
++		if err := c.PreparePINPairing(ctx); err != nil {
++			return err
++		}
++		m2 = c.pendingPINSetup
++		c.pendingPINSetup = nil
++	}
+ 
+ 	salt := m2[tlvSalt]
+ 	serverPubB := m2[tlvPublicKey]
+diff --git a/internal/airplay/receiver_server_test.go b/internal/airplay/receiver_server_test.go
+index c3c28f1..d40c1dd 100644
+--- a/internal/airplay/receiver_server_test.go
++++ b/internal/airplay/receiver_server_test.go
+@@ -1089,3 +1089,26 @@ func requireReceiverStatus(t *testing.T, err error, want int) {
+ 		t.Fatalf("receiver request error = %v, want HTTP %d", err, want)
+ 	}
+ }
++
++// Regression for the linuxcast PIN prompt ordering: M1/M2 happen before the
++// credential prompt, and Pair must reuse that challenge rather than request one.
++func TestLinuxcastPINChallengeReuse(t *testing.T) {
++	server, client, ctx := newReceiverServerTestPair(t, ReceiverConfig{
++		Profile: ReceiverProfileModern, Auth: ReceiverAuthPIN, Code: "4827",
++	})
++	if err := client.StartPINDisplay(); err != nil {
++		t.Fatal(err)
++	}
++	if err := client.PreparePINPairing(ctx); err != nil {
++		t.Fatal(err)
++	}
++	if got := server.Stats().PairSetup; got != 1 {
++		t.Fatalf("requests before prompt = %d, want 1", got)
++	}
++	if err := client.Pair(ctx, "4827"); err != nil {
++		t.Fatal(err)
++	}
++	if got := server.Stats().PairSetup; got != 3 {
++		t.Fatalf("requests after pairing = %d, want 3 (no second M1)", got)
++	}
++}

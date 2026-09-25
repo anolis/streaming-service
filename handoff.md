@@ -1,22 +1,23 @@
 # linuxcast: handoff
 
-As of 2026-09-23.
+As of 2026-09-25.
 
 ## Summary
 
-**linuxcast gives Linux a Windows-style "Cast to device": Chromecast and DLNA TVs work today, AirPlay is paired but blocked by the Samsung's firmware, and Miracast hasn't been started.** It is a Python CLI with one backend per protocol, plus a Cinnamon panel applet (Super+K), an Xfce tray app, and a Nemo right-click action. The repo is private at github.com/anolis/streaming-service; The DLNA baseline is commit `710f57d`. The AirPlay backend, device-level "can't cast" reasons, and the review fixes below are included in the commit containing this handoff. The review fixes have automated regression coverage; compatible AirPlay video playback remains unverified on hardware.
+**linuxcast gives Linux a Windows-style "Cast to device": Chromecast and DLNA TVs work today, native AirPlay desktop video and audio are confirmed on the Samsung, and Miracast hasn't been started.** It is a Python CLI with one backend per protocol, plus a Cinnamon panel applet (Super+K), an Xfce tray app, and a Nemo right-click action. The repo is public and MIT-licensed at github.com/anolis/streaming-service. Public website: https://anolis.github.io/streaming-service/. Native AirPlay is integrated as an optional experimental backend. The review fixes have automated regression coverage; URL-video playback on compatible AirPlay receivers remains unverified; native Samsung video now has a positive hardware result.
 
 The user's intent: the full set of Windows casting targets (Miracast, Chromecast, AirPlay) for testing, starting with the Chromecast they own. A Samsung TV found on the LAN later made DLNA, AirPlay and Miracast testable too.
 
 ## What works today
 
-Chromecast and DLNA are verified on real hardware; AirPlay video is impossible on the Samsung; Miracast is unbuilt.
+Chromecast and DLNA are verified on real hardware; the Samsung has displayed the desktop with audio over native AirPlay; Miracast is unbuilt.
 
 | Protocol | Device tested | Screen mirroring | Files / URLs | Latency | Verified by |
 | --- | --- | --- | --- | --- | --- |
 | Chromecast | "Bedroom TV" (Chromecast, 10.3.10.27) | Yes (HLS) | Yes; auto-transcodes formats it can't decode | ~10 s, by design | Dozens of real casts; injected-stall tests: 0% buffering |
 | DLNA | "LivingRoom" Samsung UN65AU8000 (10.3.10.55) | Yes (continuous MPEG-TS) | Yes, served as-is | Not measured yet | TV reported PLAYING for 45 s of mirroring and a full 8 s test clip |
-| AirPlay | Same Samsung (AirPlay 2) | No | No, for this TV | n/a | Pairing works (credentials saved); TV answers 404 to video `/play` |
+| AirPlay URL | Same Samsung (AirPlay 2) | No (HLS URL path) | No, for this TV | n/a | TV answers 404 to `/play` |
+| AirPlay native | Same Samsung | 720p/30 desktop + audio | Screen mirroring only | Not measured | User confirmed desktop and tone in a 20-second Debian 13 X11 test |
 | Miracast | Same Samsung ("Screen Mirroring") | Not built | n/a | ~0.5 s expected | Only prerequisites checked (Wi-Fi Direct device exists) |
 
 Desktop integration lists discovered devices from the LAN backends. Unsupported devices have reasons in the Cinnamon menu, Xfce tray menu, and Xfce flyout (rendering still needs manual confirmation). Cinnamon and Xfce also expose an explicit GNOME Network Displays handoff; native Miracast discovery remains unimplemented.
@@ -50,7 +51,8 @@ The UIs read `$XDG_RUNTIME_DIR/linuxcast/session.json` to show what's casting, s
 | HTTP server | `linuxcast/httpserver.py` | Serves files with Range + DLNA headers, HLS playlists (no 304s, optional injected tags), and live streams fanned out by `Broadcaster` |
 | Chromecast | `linuxcast/backends/chromecast.py` | pychromecast; Default Media Receiver; `EXT-X-START:TIME-OFFSET=-8` |
 | DLNA | `linuxcast/backends/dlna.py` | SSDP discovery, SOAP AVTransport, session polls transport state every 1 s |
-| AirPlay | `linuxcast/backends/airplay.py` | pyatv on its own asyncio thread; pairing; `play_url`; feature-bit gating (uncommitted) |
+| AirPlay | `linuxcast/backends/airplay.py` | pyatv on its own asyncio thread; pairing; `play_url`; feature-bit gating |
+| AirPlay native | `linuxcast/backends/airplay_native.py`, `tools/` | Experimental real screen mirroring via a pinned, patched Doubletake engine (`~/.local/bin/linuxcast-airplay-native`) |
 | Miracast | `linuxcast/backends/miracast.py` | Explicit `mirror -b miracast` handoff after checking P2P and GNOME Network Displays; sessions are managed in that external app |
 | Cinnamon | `cinnamon/linuxcast@anolis/` | Panel applet; menu built once, updated in place |
 | Xfce | `xfce/linuxcast-tray` | AyatanaAppIndicator tray + Win+K-style flyout; system Python (needs PyGObject) |
@@ -59,10 +61,13 @@ The UIs read `$XDG_RUNTIME_DIR/linuxcast/session.json` to show what's casting, s
 
 ## What we've done
 
-Nine commits since Sep 22, each driven by a problem seen on the real TVs; newest first.
+Twelve commits since Sep 22, each driven by a problem seen on the real TVs; newest first.
 
 | Commit | When | Change | Why |
 | --- | --- | --- | --- |
+| `106aec5` | Sep 23 | Output resolution, frame rate and playback buffer settings | User asked for responsiveness controls |
+| `1035675` | Sep 23 | Installer installs dependencies; persistent Cast icons | `./install.sh all` left no icon on the Debian 13 Cinnamon laptop |
+| `0ecc123` | Sep 23 | pyatv AirPlay backend; session/HTTP/cleanup review fixes; tests | AirPlay work + code review |
 | `710f57d` | Sep 23 19:37 | DLNA backend: files and screen mirroring | Samsung found on the LAN; DLNA needs no pairing |
 | `0fbc574` | Sep 23 19:25 | Menus update in place; AirPlay TVs listed greyed out | User: the menu "keeps closing" on hover; Samsung "doesn't show up" |
 | `b43b6db` | Sep 23 19:14 | Only an IDLE that comes with a reason ends a cast | Casts quit seconds after starting (start-up IDLE blip) |
@@ -111,7 +116,7 @@ Most bugs came from receivers behaving differently from the specs; each finding 
 **Samsung AirPlay**
 
 - Pairing is mandatory (PIN on screen) and works. But the TV answers `POST /play` with 404 and `PUT /setProperty` with 501.
-- Its AirPlay feature bitmask `0x7F8AD0` has bit 0 (Video) clear. Its AirPlay is mirroring + audio only, and mirroring needs Apple's FairPlay, which third-party senders can't do. linuxcast now reads bit 0 to decide whether an AirPlay device can take video.
+- Its AirPlay feature bitmask `0x7F8AD0` has bit 0 (Video) clear. This excludes URL video, not native mirroring. The earlier claim that third-party senders could not mirror was incorrect: the native Doubletake engine successfully negotiated pair-verify/DataStream mirroring without FairPlay SAP on this TV. Native discovery checks mirroring bit 7 separately from URL-video bit 0.
 
 ## Review fixes (2026-09-23)
 
@@ -151,7 +156,23 @@ The user requested responsiveness controls, including output resolution, buffer 
 - Playback buffer: `--buffer` / `--buffer-seconds`, 2–20 seconds. The Chromecast/AirPlay HLS start offset and startup readiness use this setting. The 30-second rolling playlist window remains unchanged. This is not a guaranteed end-to-end latency and does not tune ffmpeg's encoder VBV buffer.
 - Defaults: 1080p, 30 fps, 8 seconds. Desktop choices persist and apply to the next cast. File playback/transcoding and external Miracast handoff are unaffected. DLNA uses the chosen resolution/frame rate but the TV controls its playback buffering.
 
-Eight settings regressions cover defaults, validation, CLI and desktop forwarding, tray preference migration/persistence, HLS offsets/readiness at both limits, and actual ffmpeg encoding of a portrait input. The full 31-test suite passed, including installer, HTTP and process-contention regressions; JavaScript/shell syntax and whitespace checks passed. New resolutions/frame rates and reduced buffer settings still require receiver hardware validation. The user also asked about AirPlay: explain that the tested Samsung rejects URL-video playback despite successful pairing; native AirPlay screen mirroring is a separate unimplemented protocol path.
+Eight settings regressions cover defaults, validation, CLI and desktop forwarding, tray preference migration/persistence, HLS offsets/readiness at both limits, and actual ffmpeg encoding of a portrait input. The full 31-test suite passed, including installer, HTTP and process-contention regressions; JavaScript/shell syntax and whitespace checks passed. New resolutions/frame rates and reduced buffer settings still require receiver hardware validation. The user also asked about AirPlay: explain that the tested Samsung rejects URL-video playback despite successful pairing; native AirPlay screen mirroring is a separate protocol path, now implemented experimentally as described below.
+
+## Native AirPlay implementation (latest work)
+
+The user requested native mirroring. Research found the open-source Doubletake sender, including third-party TV compatibility, contradicting the earlier assumption that FairPlay made this impossible. `airplay-native` is a separate experimental backend using a pinned, locally patched Doubletake engine (revision `ae067228d76df011375164814b729932ed55ca2f`). Existing `airplay` remains the pyatv URL backend.
+
+- `./install.sh airplay` installs the Debian/Ubuntu Go/GStreamer dependencies and builds `~/.local/bin/linuxcast-airplay-native`. Native install is explicit while experimental. `tools/build-airplay-native.sh` retains corresponding source, patch and license files. Tested with an isolated prefix/cache under `/tmp`; the sandboxed Go VCS inspection failed, while the outside-sandbox build succeeded.
+- The engine performs real pairing, encrypted RTSP/control, timing and media transport; the Python adapter handles discovery, structured non-secret status/PIN events, settings and process-group teardown. It waits for actual native setup before reporting casting. File pickers exclude the native backend.
+- Native credentials are independent of pyatv and stored owner-only in `~/.config/linuxcast/native-airplay.json`. Hardware-test credentials remain under `/tmp/linuxcast-native-test/`, outside the repository. Do not print their contents.
+- Capture honors X11 monitor geometry, output resolution, target fps, bitrate, encoder and audio toggle. HLS buffer seconds do not apply; `--airplay-latency-ms` (0–2000, 0=automatic) is the native playout override. Wayland delegates selection to the portal but is not hardware-tested.
+- The first Samsung PIN proof failed with M4 error 2. Comparing against pyatv exposed that the engine obtained M2 only after prompting. The patch now obtains and retains M2 before asking for the PIN. A prompt expired during the next attempt; a fresh retry then paired successfully. Ordering is covered by a Go regression; the first failure's exact cause is not conclusively isolated from PIN lifetime.
+- **Hardware result:** Samsung at `10.3.10.55:7000`, model `UAU8000_L`, advertised full features `0x38bcf46007f8ad0`. Pairing succeeded; no FPSAP bit, so the engine used pair-verify/DataStream setup. At 21:31 it reported native session ready, and the user confirmed a visible moving 720p test pattern. Synthetic video, no audio. Stopped afterward; no encoder process remained.
+- Local validation: full 41-test Python suite passed with actual native sender/receiver binaries enabled, including five localhost profiles. Modern/Roku/LG used PIN plus saved-credential reconnect; AppleTV3/UxPlay used supported raw/transient modes. Legacy profiles forced into HAP PIN mode rejected root FairPlay fields; do not claim those combinations supported. Selected upstream protocol tests also passed (including FairPlay requirements and legacy video decryption).
+
+**Engine build blocker (2026-09-23, later session):** the engine from the hardware test was a throwaway `/tmp` build and is gone, so `~/.local/bin/linuxcast-airplay-native` does not exist; `~/.config/linuxcast/native-airplay.json` does not exist either, so the next native cast needs a fresh TV PIN. `./install.sh airplay` installed Ubuntu's `golang-go` (1.18, +437 MB) but Doubletake's `go.mod` needs Go 1.25, so the build fails. Debian 13's Go (1.24) is also too old. The user's `~/.zshrc` sets `GOROOT=/home/anolis/go`, which doesn't exist and breaks any Go; the build script now unsets it. `tools/build-airplay-native.sh` was changed to fetch the official Go release into `~/.cache/linuxcast` (SHA-256 checked against go.dev) when system Go is too old, but running it was blocked by the tool permission policy pending the user's decision; the change is untested.
+
+Next native checks: build the engine (see blocker above), actual desktop capture/audio through the Python adapter, measured latency, and laptop installation. User authorized the short synthetic Samsung test and confirmed picture. A separate 20-second desktop/audio test has been requested; record its result below when available. Never describe fixture byte counts as proof of decoded picture/audio.
 
 ## Current delivery
 
@@ -184,7 +205,7 @@ Open question: should casting to a TV that is also on DLNA ever fall back automa
 
 ## Next steps
 
-The agreed order is DLNA → AirPlay → Miracast; DLNA and AirPlay are done as far as this TV allows, so Miracast is next.
+The agreed order is DLNA → AirPlay → Miracast. Native AirPlay is now under active implementation and hardware validation; Miracast remains the next distinct protocol project.
 
 1. Perform the outstanding desktop/hardware checks for the AirPlay work and regression fixes above.
 2. Confirm with the user that DLNA mirroring shows on the Samsung, and measure its latency.
@@ -241,3 +262,12 @@ LINUXCAST_DEBUG=1 linuxcast ...      # ffmpeg command + every HTTP request
 ## Open-source publication (2026-09-25)
 
 The user authorized making linuxcast open source. Added the MIT license and package metadata, removed private-access wording from the website, and authorized public visibility for `anolis/streaming-service`. This supersedes the private-repository Pages blocker above. Website deployment uses the existing Pages workflow and publishes only `site/`. The unfinished native AirPlay changes remain uncommitted and are not part of this release.
+
+## Native AirPlay desktop/audio validation (2026-09-25)
+
+- Resumed the native backend, rebuilt the pinned patched Doubletake sender, and installed it with `./install.sh airplay`. The current host is Debian 13, Cinnamon/X11 with PipeWire audio, not the previous Pop!_OS installation.
+- User confirmed desktop picture AND the quiet desktop test tone on the Samsung during a 20-second 720p/30 fps cast. NVENC initialized successfully. Fresh PIN pairing succeeded; saved native credentials remain outside the repository.
+- All 41 Python tests passed with five real localhost receiver profiles; the enhanced native suite also passed with synthetic ALAC audio counters checked on the modern receiver. The patched engine's `internal/airplay` and CLI Go suites passed.
+- Fixed missing curl/CA dependencies in the optional installer. Preserved the encoder initialization probe/fallback and visible capture errors from the previous interrupted attempt. Fixed a regression-test race where replacement could terminate a worker before its claim acknowledgement flushed.
+- The Samsung session reached the upstream three-second shutdown watchdog after streaming stopped. The adapter bounds teardown and kills/reaps the helper process group; investigate graceful teardown separately. No claim of long-session stability, measured latency, synchronization accuracy, other real receivers, or Wayland validation.
+- Native AirPlay is now suitable for experimental use through the CLI and desktop menus. `./install.sh airplay` installs it explicitly; ordinary `all` installs do not build the optional engine.

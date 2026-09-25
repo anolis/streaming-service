@@ -29,8 +29,16 @@ def claim_worker(state_path, ready, claimed):
         raise SystemExit(0)
     signal.signal(signal.SIGTERM, stop)
     ready.wait()
-    session.replace_current('mirror', 'test')
-    claimed.put(os.getpid())
+    # A competing claimant may terminate us immediately after the claim.
+    # Flush the acknowledgement before delivering that signal to the handler.
+    previous = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})
+    try:
+        session.replace_current('mirror', 'test')
+        claimed.put(os.getpid())
+        claimed.close()
+        claimed.join_thread()
+    finally:
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous)
     while True:
         time.sleep(0.05)
 

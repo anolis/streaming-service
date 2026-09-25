@@ -1,0 +1,2 @@
+# Patch context must preserve upstream whitespace, including Go indentation.
+tools/airplay-native/*.patch -whitespace

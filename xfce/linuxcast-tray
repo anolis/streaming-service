@@ -205,7 +205,7 @@ class CastTray(Gtk.Application):
         dialog.add_filter(media)
         if dialog.run() == Gtk.ResponseType.ACCEPT:
             args = ["play", dialog.get_filename()]
-            castable = [d for d in self.devices if d.get("castable")]
+            castable = [d for d in self.devices if d.get("castable") and d.get("can_play", True)]
             if len(castable) == 1:
                 args += ["--target", json.dumps(castable[0])]
             else:

@@ -1,9 +1,8 @@
 """AirPlay backend (Apple TV, and TVs with AirPlay 2 such as Samsung/LG), via pyatv.
 
 The receiver pulls media from a URL, like Chromecast, so files are served over
-HTTP and the screen is mirrored as HLS (native to AirPlay video). Real AirPlay
-screen mirroring needs Apple's FairPlay on the sending side, which third-party
-senders can't do, so latency is the same as Chromecast's (~10 s).
+HTTP and the screen is mirrored as HLS (native to AirPlay video). Native screen mirroring is implemented separately by the experimental
+`airplay-native` backend; this URL backend has Chromecast-like latency (~10 s).
 
 Most receivers require a one-time pairing (the TV shows a PIN): run
 `linuxcast pair -d NAME`. Credentials are kept in ~/.config/linuxcast/airplay.json.
@@ -34,7 +33,7 @@ except ImportError:  # pragma: no cover - reported via available()
 
 # AirPlay "features" bit 0: the receiver plays video from a URL (/play). Apple TVs
 # set it; e.g. Samsung TVs don't (their AirPlay is mirroring + audio, and
-# mirroring needs Apple's FairPlay, which we can't do).
+# native mirroring uses a separate protocol backend).
 FEATURE_VIDEO = 1 << 0
 
 CREDENTIALS = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "linuxcast" / "airplay.json"
@@ -107,10 +106,12 @@ class AirPlayBackend(Backend):
             ident = conf.identifier
             paired = ident in creds or svc.pairing.name == "NotNeeded"
             low = (svc.properties.get("features") or "0").split(",")[0]
-            video = bool(int(low, 16) & FEATURE_VIDEO)
+            features = int(low, 16)
+            video = bool(features & FEATURE_VIDEO)
             devices.append(Device(self.name, ident, conf.name, host=str(conf.address),
                                   model=conf.device_info.raw_model or conf.device_info.model_str,
-                                  extra={"paired": paired, "video": video}))
+                                  extra={"paired": paired, "video": video, "mirroring": bool(features & (1 << 7)),
+                                         "port": svc.port}))
         return devices
 
     async def _config(self, device):
@@ -148,7 +149,7 @@ class AirPlayBackend(Backend):
 
     def unsupported_reason(self, device):
         if not device.extra.get("video", True):
-            return "its AirPlay doesn't accept video from non-Apple devices"
+            return "URL video unsupported; use native AirPlay mirroring"
         return None
 
     def _require_paired(self, device):
