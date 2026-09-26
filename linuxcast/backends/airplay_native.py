@@ -89,7 +89,7 @@ class AirPlayNativeBackend(AirPlayBackend):
                                      text=True, timeout=5, check=True).stdout.strip()
         except (OSError, subprocess.SubprocessError) as exc:
             raise BackendUnavailable('native AirPlay engine is unavailable; rerun ./install.sh airplay') from exc
-        if version != f'linuxcast-airplay/1 {ENGINE_REVISION}':
+        if version != f'linuxcast-airplay/2 {ENGINE_REVISION}':
             raise BackendUnavailable('native AirPlay engine version mismatch; rerun ./install.sh airplay')
         credentials = Path(os.environ.get('XDG_CONFIG_HOME', Path.home() / '.config')) / 'linuxcast/native-airplay.json'
         credentials.parent.mkdir(parents=True, exist_ok=True, mode=0o700)

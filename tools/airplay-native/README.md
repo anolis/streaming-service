@@ -20,6 +20,7 @@ The patch adds:
 - output dimensions and an X11 monitor rectangle;
 - encoder initialization probes with automatic fallback when a hardware encoder cannot start;
 - visible GStreamer errors when capture fails;
+- bounded shutdown of blocked feedback/teardown control requests and early media-socket closure;
 - acquisition of the PIN challenge before prompting, matching the ordering used
   by pyatv, so the entered PIN is used with the retained challenge.
 
@@ -68,6 +69,13 @@ On 2026-09-25, the user confirmed both the desktop picture and a quiet test tone
 on a Samsung AU8000 during a 20-second X11 cast from Debian 13, at 720p/30 fps
 using NVENC and desktop audio through PipeWire’s PulseAudio compatibility service.
 Pairing used a fresh PIN; the adapter saved credentials for future connections.
-The sender reached its bounded shutdown timeout after the test; the adapter
-reaped its process group. Long-session stability, precise synchronization,
-latency and Wayland capture remain unverified.
+The follow-up two-minute desktop/audio cast and ten-second saved-pairing reconnect
+both exited normally: teardown took 0.36 s and 1.02 s. Blocked feedback and
+teardown requests now have a one-second shutdown deadline, and closing the media
+socket unblocks heartbeat writes before joining workers. The engine bridge is
+version 2; rerun `./install.sh airplay` to replace an older build.
+
+Set `LINUXCAST_AIRPLAY_SOAK_SECONDS=120` with the local validation command above
+to additionally check two minutes of advancing video/audio packet counters.
+Long-session stability, precise synchronization, latency and Wayland capture
+remain unverified.

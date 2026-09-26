@@ -149,7 +149,8 @@ must fit its negotiated canvas. X11 uses the selected monitor; on Wayland the
 native sender uses the screen-sharing portal (hardware validation pending).
 
 This is experimental. A 20-second 720p/30 fps X11 desktop cast with desktop audio
-was confirmed on a Samsung AU8000 from Debian 13. Other receivers, Wayland,
+was confirmed on a Samsung AU8000 from Debian 13. A follow-up two-minute cast
+and saved-pairing reconnect completed with clean shutdown. Other receivers, Wayland,
 long sessions, audio/video synchronization and measured latency still need validation. The default
 build supports ALAC audio; AAC-ELD-only receivers require optional engine support
 and are not covered by this installer. Use `--no-audio` to isolate video.

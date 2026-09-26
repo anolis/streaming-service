@@ -271,3 +271,11 @@ The user authorized making linuxcast open source. Added the MIT license and pack
 - Fixed missing curl/CA dependencies in the optional installer. Preserved the encoder initialization probe/fallback and visible capture errors from the previous interrupted attempt. Fixed a regression-test race where replacement could terminate a worker before its claim acknowledgement flushed.
 - The Samsung session reached the upstream three-second shutdown watchdog after streaming stopped. The adapter bounds teardown and kills/reaps the helper process group; investigate graceful teardown separately. No claim of long-session stability, measured latency, synchronization accuracy, other real receivers, or Wayland validation.
 - Native AirPlay is now suitable for experimental use through the CLI and desktop menus. `./install.sh airplay` installs it explicitly; ordinary `all` installs do not build the optional engine.
+
+## Native AirPlay shutdown and reconnect (2026-09-25)
+
+- Fixed the shutdown wait order: close the video data socket before joining heartbeat workers and bound feedback/TEARDOWN control I/O to one second. Previously these could wait up to 30 seconds while the process watchdog fired after three. Added Go regressions for blocked feedback writes and unanswered teardown reads.
+- Bumped the engine bridge to `linuxcast-airplay/2`; older binaries now get an actionable reinstall error. Upstream remains pinned to the same revision.
+- Two-minute synthetic localhost soak passed with advancing video AND audio counters checked every five seconds. Five receiver profiles passed pairing/reconnect; initial stream shutdown is now required to return exit code zero.
+- Authorized Samsung hardware run: 120 seconds of 720p/30 X11 desktop/audio, followed by a 10-second reconnect using saved credentials. Both senders stayed alive for the requested duration and exited zero; close took 0.36 s and 1.02 s. No PIN was needed and no forced-exit watchdog fired. This supersedes the earlier Samsung shutdown limitation. Visual quality confirmation is recorded separately if received.
+- Validation: all 42 Python regressions passed, plus both patched engine Go suites and the separate two-minute localhost soak.

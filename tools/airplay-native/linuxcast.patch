@@ -1,5 +1,5 @@
 diff --git a/cmd/doubletake/main.go b/cmd/doubletake/main.go
-index b49aab6..24ebf10 100644
+index b49aab6..e517dac 100644
 --- a/cmd/doubletake/main.go
 +++ b/cmd/doubletake/main.go
 @@ -3,6 +3,7 @@ package main
@@ -42,7 +42,7 @@ index b49aab6..24ebf10 100644
 +	bridgeVersion := flag.Bool("linuxcast-version", false, "Print linuxcast integration version")
  	flag.Parse()
 +	if *bridgeVersion {
-+		fmt.Println("linuxcast-airplay/1 ae067228d76df011375164814b729932ed55ca2f")
++		fmt.Println("linuxcast-airplay/2 ae067228d76df011375164814b729932ed55ca2f")
 +		return
 +	}
 +	if (*outputWidth == 0) != (*outputHeight == 0) || *outputWidth < 0 || *outputHeight < 0 || *outputWidth%2 != 0 || *outputHeight%2 != 0 {
@@ -218,6 +218,83 @@ index cd35c0e..c93c6ed 100644
  	// advertisement is the optional mDNS snapshot used only to fill fields
  	// omitted by /info. Explicit /info values always take precedence.
  	advertisement *AirPlayDevice
+diff --git a/internal/airplay/mirror.go b/internal/airplay/mirror.go
+index 1784951..e2c75d0 100644
+--- a/internal/airplay/mirror.go
++++ b/internal/airplay/mirror.go
+@@ -2084,6 +2084,19 @@ func (s *MirrorSession) Close() error {
+ 		if s.cancel != nil {
+ 			s.cancel()
+ 		}
++		// A receiver may stop answering feedback or TEARDOWN. Cancellation
++		// alone cannot interrupt the control socket's blocking I/O. Bound the
++		// entire shutdown exchange, including a worker holding the RTSP lock.
++		deadline := time.AfterFunc(time.Second, func() {
++			if s.client != nil && s.client.conn != nil {
++				_ = s.client.conn.Close()
++			}
++		})
++		defer deadline.Stop()
++		// Unblock a heartbeat write before waiting for its worker.
++		if s.dataConn != nil {
++			s.closeErr = s.dataConn.Close()
++		}
+ 		s.workers.Wait()
+ 
+ 		// Send TEARDOWN to cleanly end the RTSP session on the receiver.
+@@ -2104,9 +2117,6 @@ func (s *MirrorSession) Close() error {
+ 		if s.timingConn != nil {
+ 			_ = s.timingConn.Close()
+ 		}
+-		if s.dataConn != nil {
+-			s.closeErr = s.dataConn.Close()
+-		}
+ 	})
+ 	return s.closeErr
+ }
+diff --git a/internal/airplay/mirror_clock_test.go b/internal/airplay/mirror_clock_test.go
+index 4de33c5..be1b44c 100644
+--- a/internal/airplay/mirror_clock_test.go
++++ b/internal/airplay/mirror_clock_test.go
+@@ -658,3 +658,38 @@ func TestSendNTPTimingProbesUsesReceiverPort(t *testing.T) {
+ 		}
+ 	}
+ }
++
++// A silent receiver must not hold the sender until its process watchdog fires.
++func TestLinuxcastCloseBoundsUnresponsiveControl(t *testing.T) {
++	for _, feedback := range []bool{false, true} {
++		name := "teardown"
++		if feedback {
++			name = "feedback"
++		}
++		t.Run(name, func(t *testing.T) {
++			sender, receiver := net.Pipe()
++			defer sender.Close()
++			defer receiver.Close()
++			if !feedback {
++				go func() { _, _ = io.Copy(io.Discard, receiver) }()
++			}
++			client := &AirPlayClient{conn: sender}
++			session := &MirrorSession{client: client, sessionURI: "rtsp://receiver/session"}
++			if feedback {
++				session.startWorker(func() {
++					_, _, _ = client.rtspRequest("POST", "/feedback", "", nil, nil)
++				})
++			}
++			done := make(chan error, 1)
++			go func() { done <- session.Close() }()
++			select {
++			case <-done:
++			case <-time.After(2 * time.Second):
++				t.Fatal("Close blocked on an unresponsive receiver")
++			}
++			if err := session.Close(); err != nil {
++				t.Fatal(err)
++			}
++		})
++	}
++}
 diff --git a/internal/airplay/pairing.go b/internal/airplay/pairing.go
 index 8384997..862d7ed 100644
 --- a/internal/airplay/pairing.go

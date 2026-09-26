@@ -57,6 +57,13 @@ class NativeAdapterTests(unittest.TestCase):
             reason = AirPlayNativeBackend().unsupported_reason(Device('airplay-native', 'id', 'TV'))
         self.assertIn('./install.sh airplay', reason)
 
+    def test_old_bridge_requires_reinstallation(self):
+        with patch('linuxcast.backends.airplay_native.engine_path', return_value='/engine'), \
+             patch('linuxcast.backends.airplay_native.subprocess.run',
+                   return_value=SimpleNamespace(stdout=f'linuxcast-airplay/1 {ENGINE_REVISION}')):
+            with self.assertRaisesRegex(BackendUnavailable, 'version mismatch'):
+                AirPlayNativeBackend()._command(Device('airplay-native', 'id', 'TV'))
+
     def test_bitrate_conversion(self):
         self.assertEqual(bitrate_kbps('8M'), 8000)
         self.assertEqual(bitrate_kbps('4500k'), 4500)
@@ -133,7 +140,24 @@ class NativeWireTests(unittest.TestCase):
                     self.assertRegex(logfile.read_text(), r'video=[1-9]\d*/[1-9]\d*B')
                     if profile == 'modern':
                         self.assertRegex(logfile.read_text(), r'audio=[1-9]\d*/[1-9]\d*B')
+                    if profile == 'modern':
+                        soak = float(os.environ.get('LINUXCAST_AIRPLAY_SOAK_SECONDS', '0'))
+                        deadline = time.monotonic() + soak
+                        last_check = time.monotonic()
+                        previous = (0, 0)
+                        while time.monotonic() < deadline:
+                            self.assertIsNone(session.proc.poll(), 'sender exited during soak')
+                            if time.monotonic() - last_check >= 5:
+                                stats = re.findall(r'video=([0-9]+)/[0-9]+B audio=([0-9]+)/[0-9]+B', logfile.read_text())
+                                self.assertTrue(stats)
+                                current = tuple(map(int, stats[-1]))
+                                self.assertGreater(current[0], previous[0], 'video stalled')
+                                self.assertGreater(current[1], previous[1], 'audio stalled')
+                                previous = current
+                                last_check = time.monotonic()
+                            time.sleep(.2)
                     session.close()
+                    self.assertEqual(session.proc.returncode, 0, 'sender needed forced shutdown')
                     session = None
                     # Repeat using the persisted native credentials, without prompting.
                     session = NativeSession.start(command, prompt=Mock(side_effect=AssertionError('unexpected PIN')), timeout=30)
