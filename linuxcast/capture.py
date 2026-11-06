@@ -7,6 +7,7 @@ over plain HTTP. Short segments keep mirror latency to a few seconds.
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import shutil
@@ -166,7 +167,7 @@ def screen_ts_command(opts: CaptureOptions) -> list[str]:
 
 def transcode_command(src: str, outdir: Path, encoder: str = "auto") -> list[str]:
     venc = video_encoder_args(encoder, 30, "8M")
-    cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-re", "-i", src,
+    cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-i", src,
            "-map", "0:v:0", "-map", "0:a:0?",
            "-vf", _scale_filter("h264_vaapi" in venc), *venc,
            "-c:a", "aac", "-b:a", "192k", "-ac", "2", "-ar", "48000"]
@@ -175,8 +176,8 @@ def transcode_command(src: str, outdir: Path, encoder: str = "auto") -> list[str
 
 def probe(src: str) -> dict:
     out = subprocess.run(
-        ["ffprobe", "-v", "error", "-show_entries", "format=format_name:stream=codec_type,codec_name",
-         "-of", "json", src], capture_output=True, text=True)
+        ["ffprobe", "-v", "error", "-show_entries", "format=format_name,duration:stream=codec_type,codec_name,duration",
+         "-of", "json", src], capture_output=True, text=True, timeout=15)
     return json.loads(out.stdout or "{}")
 
 
@@ -187,8 +188,24 @@ _NATIVE = {
 }
 
 
-def needs_transcode(src: str) -> bool:
-    info = probe(src)
+def media_duration(info: dict) -> float | None:
+    """Prefer container duration, falling back to the longest timed stream."""
+    def seconds(value):
+        try:
+            result = float(value)
+            return result if math.isfinite(result) and result > 0 else None
+        except (TypeError, ValueError):
+            return None
+    duration = seconds(info.get("format", {}).get("duration"))
+    if duration is not None:
+        return duration
+    durations = [seconds(stream.get("duration")) for stream in info.get("streams", [])]
+    return max((value for value in durations if value is not None), default=None)
+
+
+def needs_transcode(src: str, info: dict | None = None) -> bool:
+    if info is None:
+        info = probe(src)
     fmt = info.get("format", {}).get("format_name", "")
     streams = info.get("streams", [])
     v = {s["codec_name"] for s in streams if s.get("codec_type") == "video"}

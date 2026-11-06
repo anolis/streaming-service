@@ -328,3 +328,25 @@ Validation: 53 Python tests ran successfully (one existing skip); Node menu-even
 test covers progress without rebuild, drag release, wheel debounce and unknown
 duration. Real GTK dialog smoke test verifies initial position and absolute-seek
 callback using a mock state; screenshot inspected. No hardware cast changed.
+
+### Missing duration during MKV transcoding — 2026-11-06
+
+Observed the user's active Chromecast file session reporting duration=null and
+seek=true; logs confirmed on-the-fly MKV transcoding to a growing EVENT playlist.
+Receiver-only duration was insufficient. Local file probing now includes
+container/stream duration, validates positive finite values, passes duration in
+the receiver load metadata and retains the source duration for status/seek bounds
+even when the receiver omits it or reports only a partial duration.
+
+Removed -re from file transcoding to allow preparing footage ahead of playback.
+The timeline marks and labels the prepared HLS extent. Requests beyond encoded
+segments return an explicit error, with no invalid receiver seek or stream reset.
+This is not random-access transcoding: far-ahead seeking requires waiting for
+those segments to encode. Existing streams need a restart to load the code.
+Absolute seeking no longer requires a reported current position.
+
+Validation: full 58-test suite passed (one existing skip), including missing and
+partial duration, probe validation, load metadata, transcoding ahead and prepared
+seek bounds. Real ffprobe on a generated MKV returned its expected duration.
+Cinnamon timeline test verifies the prepared-position mark and label. No physical
+receiver command or playback restart was issued during this fix.

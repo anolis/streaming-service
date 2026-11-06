@@ -7,6 +7,7 @@ class Item {
     connect(name, callback) { this.events[name] = callback; }
     setSensitive(value) { this.sensitive = value; }
     setValue(value) { this.value = value; }
+    set_mark(value) { this.mark = value; }
     emit(name, ...args) { this.events[name](this, ...args); }
 }
 const timers = new Map(); let serial = 0;
@@ -52,4 +53,9 @@ app._seekPendingUntil = 0;
 app.state.playback.duration = null;
 app._syncStatus();
 assert.equal(slider.sensitive, false);
+app.state.playback.duration = 100;
+app.state.playback.seek_end = 60;
+app._syncStatus();
+assert.equal(slider.mark, .6);
+assert.match(app._seekLabel.text, /ready through 1:00/);
 console.log('PASS: Cinnamon timeline progress, drag release, wheel debounce, unknown duration');

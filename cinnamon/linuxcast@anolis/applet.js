@@ -411,8 +411,11 @@ class CastApplet extends Applet.IconApplet {
         if (this._seekDragging || this._seekTimer || GLib.get_monotonic_time() < (this._seekPendingUntil || 0))
             return;
         this._seekSlider.setValue(p.duration ? p.position / p.duration : 0);
+        let preparing = p.duration && p.seek_end !== null && p.seek_end !== undefined && p.seek_end < p.duration - 1;
+        this._seekSlider.set_mark(preparing ? p.seek_end / p.duration : 0);
+        let ready = preparing ? ` · ready through ${this._timeLabel(p.seek_end)}` : "";
         this._seekLabel.label.set_text(p.duration ?
-            `${this._timeLabel(p.position)} / ${this._timeLabel(p.duration)}` : "Duration unavailable — cannot seek");
+            `${this._timeLabel(p.position)} / ${this._timeLabel(p.duration)}${ready}` : "Duration unavailable — cannot seek");
     }
 
     _syncDevices() {

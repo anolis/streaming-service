@@ -64,16 +64,19 @@ class ChromecastBackend(Backend):
             raise RuntimeError(f"{device.name} ({device.host}) did not respond")
         return cast
 
-    def _start(self, device, url, content_type, title, live, cleanup) -> "CastSession":
+    def _start(self, device, url, content_type, title, live, cleanup, duration=None) -> "CastSession":
         cast = self._connect(device)
         mc = cast.media_controller
         session = CastSession(cast, cleanup)
+        session._source_duration = duration
         mc.register_status_listener(session)
         media_info = None
         if content_type == "application/x-mpegURL":
             fmt = "fmp4" if capture.SEGMENT_TYPE == "fmp4" else "ts"
             media_info = {"hlsSegmentFormat": fmt,
                           "hlsVideoSegmentFormat": "fmp4" if fmt == "fmp4" else "mpeg2_ts"}
+        if duration is not None:
+            media_info = (media_info or {}) | {"duration": duration}
         try:
             mc.play_media(url, content_type, title=title,
                           stream_type="LIVE" if live else "BUFFERED", media_info=media_info)
@@ -126,7 +129,9 @@ class ChromecastBackend(Backend):
             resources.callback(shutil.rmtree, workdir, ignore_errors=True)
             server = MediaServer(workdir, local_ip_for(device.host)).start()
             resources.callback(server.close)
-            if capture.needs_transcode(str(path)):
+            info = capture.probe(str(path))
+            duration = capture.media_duration(info)
+            if capture.needs_transcode(str(path), info=info):
                 print(f"{path.name}: format not native to Chromecast, transcoding on the fly")
                 hls = capture.HlsProcess(capture.transcode_command(str(path), workdir), workdir)
                 resources.callback(hls.stop)
@@ -135,11 +140,13 @@ class ChromecastBackend(Backend):
             else:
                 url = server.add_file(path)
                 ctype = mimetypes.guess_type(path.name)[0] or "video/mp4"
-            s = self._start(device, url, ctype, path.name, live=False, cleanup=cleanup)
+            s = self._start(device, url, ctype, path.name, live=False, cleanup=cleanup, duration=duration)
         except BaseException:
             cleanup()
             raise
         s.child = hls.proc if hls else None
+        if hls:
+            s._seek_limit = lambda: capture.live_edge(workdir)
         return s
 
     def stop(self, device):
@@ -157,6 +164,8 @@ class CastSession(Session, MediaStatusListener):
         self._cleanup = cleanup
         self._done = threading.Event()
         self._skip = threading.Event()
+        self._source_duration = None
+        self._seek_limit = None
         self.child = None  # ffmpeg process, if any
         self.last_error = None
         self._live_edge = None  # callable -> seconds at the live edge, for logging lag
@@ -219,11 +228,15 @@ class CastSession(Session, MediaStatusListener):
                   and status.media_session_id == self._media_session
                   and status.player_state in ("PLAYING", "PAUSED", "BUFFERING"))
         position = status.adjusted_current_time
-        duration = status.duration
+        duration = self._source_duration or status.duration
         position = max(0, int(position)) if isinstance(position, (int, float)) and math.isfinite(position) else 0
         duration = duration if isinstance(duration, (int, float)) and math.isfinite(duration) and duration > 0 else None
+        seek_end = self._seek_limit() if self._seek_limit else duration
+        if seek_end is not None:
+            seek_end = min(seek_end, duration) if duration else seek_end
+            seek_end = max(0, int(seek_end))
         return {"active": active, "state": status.player_state,
-                "position": position, "duration": duration,
+                "position": position, "duration": duration, "seek_end": seek_end,
                 "play": active and status.player_state == "PAUSED",
                 "pause": active and status.player_state != "PAUSED" and bool(status.supports_pause),
                 "seek": active and bool(status.supports_seek) and status.stream_type != "LIVE"}
@@ -249,11 +262,16 @@ class CastSession(Session, MediaStatusListener):
                 raise RuntimeError("Seek offset must be a finite number of seconds")
             status = mc.status
             position = status.adjusted_current_time
-            if position is None or not math.isfinite(position):
+            if action == "seek" and (position is None or not math.isfinite(position)):
                 raise RuntimeError("Receiver has not reported a playback position yet")
             target = max(0, seconds if action == "seek-to" else position + seconds)
-            if status.duration and math.isfinite(status.duration):
-                target = min(target, max(0, status.duration - 0.1))
+            duration = available["duration"]
+            if duration:
+                target = min(target, max(0, duration - 0.1))
+            prepared = self._seek_limit() if self._seek_limit else None
+            if self._seek_limit and (prepared is None or target >= prepared):
+                ready = max(0, int(prepared or 0))
+                raise RuntimeError(f"That point is still encoding. Ready through {ready // 60}:{ready % 60:02}; try again as encoding progresses.")
             paused = status.player_state == "PAUSED"
             mc.seek(target)
             # pychromecast's seek resumes playback; retain an intentional pause.

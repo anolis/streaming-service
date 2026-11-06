@@ -182,7 +182,11 @@ While casting a file or URL, the Cinnamon Cast menu and desktop tray menu offer
 Cinnamon displays the timeline directly in the menu. On AppIndicator desktops,
 choose **Seek…** to open the timeline window. It shows elapsed/total time and
 seeks on release; keyboard and scroll-wheel adjustments are also supported.
-A known duration is required to use the timeline.
+A known duration is required to use the timeline. Local files use ffprobe metadata
+when the receiver omits it. For files being transcoded, a mark and “ready through”
+label show how far seeking is available; later sections become available as
+encoding runs ahead. Seeking past that point reports an error without reloading
+the media.
 Unavailable receiver actions are disabled. Seeking while paused keeps playback
 paused. These controls operate on the existing media session without reloading
 or restarting the file; live screen mirroring is unchanged.

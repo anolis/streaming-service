@@ -8,9 +8,9 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from linuxcast import cli, control, session
+from linuxcast import cli, control, session, capture
 from linuxcast.base import Device
-from linuxcast.backends.chromecast import CastSession
+from linuxcast.backends.chromecast import CastSession, ChromecastBackend
 
 
 def running_cast():
@@ -55,6 +55,51 @@ class PlaybackTests(unittest.TestCase):
         status.adjusted_current_time = float("nan")
         self.assertIsNone(active.playback_status()["duration"])
         self.assertEqual(active.playback_status()["position"], 0)
+
+    def test_file_duration_fallback_and_transcode_seek_boundary(self):
+        active, mc, status = running_cast()
+        status.duration = None
+        active._source_duration = 1800
+        active._seek_limit = lambda: 120.5
+        snapshot = active.playback_status()
+        self.assertEqual(snapshot["duration"], 1800)
+        self.assertEqual(snapshot["seek_end"], 120)
+        status.adjusted_current_time = None
+        active.control("seek-to", 90)
+        mc.seek.assert_called_once_with(90)
+        with self.assertRaisesRegex(RuntimeError, "still encoding"):
+            active.control("seek-to", 900)
+        self.assertEqual(mc.seek.call_count, 1)
+        active._seek_limit = lambda: 1800.1
+        active.control("seek-to", 2000)
+        mc.seek.assert_called_with(1799.9)
+
+    def test_source_duration_overrides_partial_receiver_duration(self):
+        active, _, status = running_cast()
+        active._source_duration = 1800
+        status.duration = 20
+        self.assertEqual(active.playback_status()["duration"], 1800)
+
+    def test_probe_duration_validation(self):
+        self.assertEqual(capture.media_duration({"format": {"duration": "123.45"}}), 123.45)
+        for bad in (None, "N/A", "NaN", "inf", "-1", "0"):
+            self.assertIsNone(capture.media_duration({"format": {"duration": bad}}))
+        self.assertEqual(capture.media_duration({"streams": [{"duration": "20"}, {"duration": "25"}]}), 25)
+
+    def test_file_transcode_runs_ahead(self):
+        with patch.object(capture, "video_encoder_args", return_value=["-c:v", "libx264"]):
+            command = capture.transcode_command("input.mkv", Path("/tmp/output"))
+        self.assertNotIn("-re", command)
+        self.assertIn("event", command)
+
+    def test_duration_is_sent_in_receiver_load(self):
+        active, mc, _ = running_cast()
+        backend = ChromecastBackend()
+        with patch.object(backend, "_connect", return_value=active.cast):
+            started = backend._start(None, "http://example/stream.m3u8", "application/x-mpegURL",
+                                     "file", False, lambda: None, duration=1800)
+        self.assertEqual(mc.play_media.call_args.kwargs["media_info"]["duration"], 1800)
+        self.assertEqual(started._source_duration, 1800)
 
     def test_unsupported_live_and_invalid_seeks(self):
         active, mc, status = running_cast()
