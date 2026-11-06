@@ -8,6 +8,7 @@ latency at the default 8-second playback offset: fine for video, not for games.
 
 from __future__ import annotations
 
+import math
 import mimetypes
 from contextlib import ExitStack
 import shutil
@@ -155,6 +156,7 @@ class CastSession(Session, MediaStatusListener):
         self.cast = cast
         self._cleanup = cleanup
         self._done = threading.Event()
+        self._skip = threading.Event()
         self.child = None  # ffmpeg process, if any
         self.last_error = None
         self._live_edge = None  # callable -> seconds at the live edge, for logging lag
@@ -210,8 +212,53 @@ class CastSession(Session, MediaStatusListener):
         self.last_error = f"receiver failed to load media (error {error_code})"
         self._done.set()
 
+    def playback_status(self):
+        status = self.cast.media_controller.status
+        active = (not self._done.is_set() and not self._skip.is_set()
+                  and self._media_session is not None
+                  and status.media_session_id == self._media_session
+                  and status.player_state in ("PLAYING", "PAUSED", "BUFFERING"))
+        return {"active": active, "state": status.player_state,
+                "play": active and status.player_state == "PAUSED",
+                "pause": active and status.player_state != "PAUSED" and bool(status.supports_pause),
+                "seek": active and bool(status.supports_seek) and status.stream_type != "LIVE"}
+
+    def skip(self):
+        if not self.playback_status()["active"]:
+            raise RuntimeError("The media session is no longer active")
+        self._skip.set()
+
+    def control(self, action, seconds=None):
+        available = self.playback_status()
+        if action not in ("play", "pause", "seek"):
+            raise RuntimeError("Unknown playback command")
+        if not available[action]:
+            raise RuntimeError(f"{action.capitalize()} is unavailable for the current media")
+        mc = self.cast.media_controller
+        if action == "play":
+            mc.play()
+        elif action == "pause":
+            mc.pause()
+        else:
+            if type(seconds) not in (int, float) or not math.isfinite(seconds):
+                raise RuntimeError("Seek offset must be a finite number of seconds")
+            status = mc.status
+            position = status.adjusted_current_time
+            if position is None or not math.isfinite(position):
+                raise RuntimeError("Receiver has not reported a playback position yet")
+            target = max(0, position + seconds)
+            if status.duration and math.isfinite(status.duration):
+                target = min(target, max(0, status.duration - 0.1))
+            paused = status.player_state == "PAUSED"
+            mc.seek(target)
+            # pychromecast's seek resumes playback; retain an intentional pause.
+            if paused:
+                mc.pause()
+
     def wait(self):
         while not self._done.wait(0.5):
+            if self._skip.is_set():
+                break
             if self._idle_since and time.monotonic() - self._idle_since > self.IDLE_GRACE_S:
                 self.end_note = "the receiver went idle"
                 break

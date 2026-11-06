@@ -174,3 +174,31 @@ still require separate checks.
 linuxcast is available under the [MIT license](LICENSE). Third-party dependencies retain their own licenses.
 
 Project website: https://anolis.github.io/streaming-service/
+
+### Chromecast playback controls
+
+While casting a file or URL, the Cinnamon Cast menu and desktop tray menu offer
+**Play**, **Pause**, **Back 10 seconds**, **Forward 30 seconds**, and **Next file**.
+Unavailable receiver actions are disabled. Seeking while paused keeps playback
+paused. These controls operate on the existing media session without reloading
+or restarting the file; live screen mirroring is unchanged.
+
+Select multiple files in **Cast a media file…** to play them in selection order.
+**Next file** skips to the next selected file, and normal completion advances
+through the list. It is disabled for the last/only file. Multiple-file playback
+currently requires Chromecast. Stopping or taking over the receiver ends the
+queue instead of starting another file.
+
+The equivalent commands are:
+
+```sh
+linuxcast play first.mp4 second.mp4 --device 'Living room'
+linuxcast control pause
+linuxcast control play
+linuxcast control seek -10
+linuxcast control seek 30
+linuxcast control next
+```
+
+After updating, reload the applet/restart the tray and start a new cast once;
+casts started by older LinuxCast versions do not have the new command connection.

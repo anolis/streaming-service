@@ -279,3 +279,36 @@ The user authorized making linuxcast open source. Added the MIT license and pack
 - Two-minute synthetic localhost soak passed with advancing video AND audio counters checked every five seconds. Five receiver profiles passed pairing/reconnect; initial stream shutdown is now required to return exit code zero.
 - Authorized Samsung hardware run: 120 seconds of 720p/30 X11 desktop/audio, followed by a 10-second reconnect using saved credentials. Both senders stayed alive for the requested duration and exited zero; close took 0.36 s and 1.02 s. No PIN was needed and no forced-exit watchdog fired. This supersedes the earlier Samsung shutdown limitation. Visual quality confirmation is recorded separately if received.
 - Validation: all 42 Python regressions passed, plus both patched engine Go suites and the separate two-minute localhost soak.
+
+## Chromecast playback controls — 2026-11-06
+
+User needs transport controls for Chromecast receivers without physical remotes.
+Implemented Play/Pause, relative seek −10/+30 seconds and Next file in Cinnamon
+and the desktop tray menus, plus `linuxcast control play|pause|seek|next`.
+Controls are only exposed for Chromecast file/URL casts; live mirrors and other
+backends are unchanged. Receiver capability/state gates Play/Pause/Seek; Next
+requires another selected file. Menus capture a per-cast endpoint so stale clicks
+cannot target a replacement cast. Seeking clamps to the media bounds and restores
+pause because pychromecast seek defaults to resuming.
+
+`linuxcast/control.py` serves a private Unix socket in a mode-0700 temporary
+runtime directory. The owning cast process handles commands on its existing
+receiver connection. Bounded requests, socket timeouts, explicit error replies,
+and joining in-flight commands before receiver cleanup keep lifecycle ownership
+in one place. Session JSON publishes the endpoint and capability/status snapshot;
+it does not continuously write playback position or rebuild menus each second.
+
+File pickers now support multi-selection; `play SOURCE [MORE_SOURCES ...]` plays
+a Chromecast sequence. Next requests exit from the current wait loop, then the
+owner cleans up the file's resources and starts the next. Only natural FINISHED
+or explicit Next advances; receiver cancellation/takeover/errors stop the queue.
+Existing casts must be restarted once to gain controls after upgrading.
+
+Validation: 52 tests ran successfully (one existing skip), including ten new transport,
+seek-bound/pause, ownership, private-socket, stale-menu, CLI and playlist tests.
+Tests use mocks/local sockets; no receiver playback was changed. JS syntax,
+Python compilation and whitespace checks pass. Real Chromecast playback/seek
+and desktop menu rendering still need hardware/manual confirmation.
+
+The installed CLI is editable and both desktop integrations link to this checkout.
+Reloaded the Cinnamon applet; the desktop log confirms it loaded successfully.

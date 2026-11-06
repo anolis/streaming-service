@@ -205,14 +205,14 @@ class CastApplet extends Applet.IconApplet {
     }
 
     _castFile() {
-        let dialog = ["zenity", "--file-selection", "--title=Cast a media file",
+        let dialog = ["zenity", "--file-selection", "--multiple", "--separator=\n", "--title=Cast media files",
             "--file-filter=Media | *.mp4 *.mkv *.webm *.mov *.avi *.m4v *.ts *.mp3 *.flac *.ogg *.wav *.m4a",
             "--file-filter=All files | *"];
         Util.spawnCommandLineAsyncIO(null, (stdout, stderr, code) => {
             let path = (stdout || "").trim();
             if (code !== 0 || !path)
                 return; // cancelled
-            let args = ["play", path];
+            let args = ["play", ...path.split("\n")];
             let castable = this.devices.filter(d => d.castable && d.can_play !== false);
             if (castable.length === 1)
                 args.push("--target", JSON.stringify(castable[0]));
@@ -220,6 +220,13 @@ class CastApplet extends Applet.IconApplet {
                 args.push("--gui"); // let the CLI discover and show a picker
             this._launch(args);
         }, { argv: dialog });
+    }
+
+    _playback(action, seconds, endpoint) {
+        let args = ["control", action, "--notify", "--session", endpoint];
+        if (seconds !== null)
+            args.push(String(seconds));
+        this._query(args, () => this._readState());
     }
 
     _stop() {
@@ -315,7 +322,7 @@ class CastApplet extends Applet.IconApplet {
 
     _syncStatus() {
         let s = this.state;
-        let key = s ? `${s.status}|${s.device.name}|${s.what}` : "";
+        let key = s ? JSON.stringify([s.status, s.device.name, s.what, s.control, s.playback]) : "";
         if (key === this._statusKey)
             return;
         this._statusKey = key;
@@ -325,6 +332,17 @@ class CastApplet extends Applet.IconApplet {
         let verb = {searching: "Looking for", connecting: "Connecting to"}[s.status] || "Casting to";
         this._statusSection.addMenuItem(this._header(`${verb} ${s.device.name}`));
         this._statusSection.addMenuItem(new PopupMenu.PopupMenuItem(s.what, { reactive: false }));
+        if (s.playback) {
+            for (let [label, action, seconds] of [["Play", "play", null], ["Pause", "pause", null],
+                                                 ["Back 10 seconds", "seek", -10],
+                                                 ["Forward 30 seconds", "seek", 30],
+                                                 ["Next file", "next", null]]) {
+                let item = new PopupMenu.PopupMenuItem(label);
+                item.setSensitive(!!s.playback[action]);
+                item.connect("activate", () => this._playback(action, seconds, s.control));
+                this._statusSection.addMenuItem(item);
+            }
+        }
         this._statusSection.addAction("Stop casting", () => this._stop());
         this._statusSection.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
     }

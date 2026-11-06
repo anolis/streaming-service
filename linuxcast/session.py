@@ -74,7 +74,7 @@ def current() -> dict | None:
     return state
 
 
-def record(device: Device | None, kind: str, what: str, status: str) -> None:
+def record(device: Device | None, kind: str, what: str, status: str, **details) -> None:
     """status is searching (device not chosen yet), connecting or casting."""
     if device:
         dev = {"backend": device.backend, "id": device.id, "name": device.name,
@@ -83,6 +83,7 @@ def record(device: Device | None, kind: str, what: str, status: str) -> None:
         dev = {"backend": None, "id": None, "name": "cast devices", "host": None}
     state = {"pid": os.getpid(), "status": status, "kind": kind, "what": what,
              "started": time.time(), "device": dev, "identity": _identity(os.getpid())}
+    state.update(details)
     with _lock("state.lock"):
         with tempfile.NamedTemporaryFile(mode="w", dir=STATE.parent,
                                          prefix="session-", delete=False) as f:

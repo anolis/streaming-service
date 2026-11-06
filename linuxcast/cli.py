@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from pathlib import Path
 
-from linuxcast import capture, session
+from linuxcast import capture, session, control
 from linuxcast.backends import BACKENDS
 from linuxcast.base import BackendUnavailable, CaptureOptions, Device, RESOLUTIONS
 
@@ -108,32 +108,52 @@ def choose_device(args, *, castable=True) -> Device:
             return matches[int(pick) - 1]
 
 
-def run_session(args, kind: str, what: str, start):
+def run_session(args, kind: str, what: str, start, items=None):
     replaced = session.replace_current(kind, what)
     if replaced:
         print(f"Stopped previous cast to {replaced['device']['name']}")
-    # Record ourselves before discovery so `linuxcast stop` works at any point.
     try:
         device = choose_device(args)
         backend = BACKENDS[device.backend]
-        session.record(device, kind, what, status="connecting")
-        print(f"Connecting to {device.name}...")
-        s = start(backend, device)
-        try:
-            session.record(device, kind, what, status="casting")
-            print(f"Casting to {device.name}. Ctrl+C to stop.")
-            notify(args, f"Casting to {device.name}", what)
-            s.wait()
-        except KeyboardInterrupt:
-            print("\nStopping...")
-        finally:
-            s.close()
-        if s.last_error:
-            raise Failure(f"Cast to {device.name} ended: {s.last_error}")
-        note = getattr(s, "end_note", None)
-        if note:
-            print(f"{device.name}: {note}", file=sys.stderr)
-        notify(args, f"Stopped casting to {device.name}", note or "")
+        names = items or [what]
+        if len(names) > 1 and device.backend != "chromecast":
+            raise Failure("Multiple-file playback currently requires Chromecast")
+        for index, name in enumerate(names):
+            session.record(device, kind, name, status="connecting")
+            print(f"Connecting to {device.name}...")
+            active = start(backend, device)
+            server = None
+            try:
+                session.record(device, kind, name, status="casting")
+                if device.backend == "chromecast" and kind == "play":
+                    def publish(path, playback):
+                        session.record(device, kind, name, status="casting", control=path,
+                                       playback=playback, queue_index=index + 1, queue_length=len(names))
+                    server = control.ControlServer(active, publish, has_next=index + 1 < len(names))
+                    server.start()
+                print(f"Casting to {device.name}. Ctrl+C to stop.")
+                notify(args, f"Casting to {device.name}", name)
+                active.wait()
+            except KeyboardInterrupt:
+                print("\nStopping...")
+                return
+            finally:
+                try:
+                    if server:
+                        server.close()
+                finally:
+                    active.close()
+            if active.last_error:
+                raise Failure(f"Cast to {device.name} ended: {active.last_error}")
+            note = getattr(active, "end_note", None)
+            if note:
+                print(f"{device.name}: {note}", file=sys.stderr)
+                break
+            if index + 1 < len(names):
+                # Never take the receiver back after an external stop/takeover.
+                if not (active._skip.is_set() or active.cast.media_controller.status.idle_reason == "FINISHED"):
+                    break
+        notify(args, f"Stopped casting to {device.name}", "")
     finally:
         session.clear()
 
@@ -195,8 +215,15 @@ def cmd_mirror(args):
 
 
 def cmd_play(args):
-    name = args.source if "://" in args.source else Path(args.source).name
-    run_session(args, "play", name, lambda b, device: b.play(device, args.source))
+    sources = [args.source, *args.more_sources]
+    names = [source if "://" in source else Path(source).name for source in sources]
+    remaining = iter(sources)
+    run_session(args, "play", names[0], lambda b, device: b.play(device, next(remaining)), items=names)
+
+
+def cmd_control(args):
+    control.send(args.action, args.seconds, args.session)
+    print("Playback command sent")
 
 
 def cmd_pair(args):
@@ -280,6 +307,14 @@ def main(argv=None):
 
     pl = add("play", cmd_play, "cast a local media file or URL")
     pl.add_argument("source")
+    pl.add_argument("more_sources", nargs="*", help="additional files/URLs in playback order (Chromecast)")
+
+    ctl = sub.add_parser("control", help="control this machine's Chromecast file playback")
+    ctl.set_defaults(fn=cmd_control)
+    ctl.add_argument("action", choices=["play", "pause", "seek", "next"])
+    ctl.add_argument("seconds", nargs="?", type=float, help="relative seek offset, e.g. -10 or 30")
+    ctl.add_argument("--session", help=argparse.SUPPRESS)
+    ctl.add_argument("--notify", action="store_true")
 
     add("stop", cmd_stop, "stop casting (this machine's cast, or --device's)")
     add("pair", cmd_pair, "one-time pairing with a device that asks for a PIN (AirPlay)") \
