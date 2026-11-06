@@ -218,7 +218,12 @@ class CastSession(Session, MediaStatusListener):
                   and self._media_session is not None
                   and status.media_session_id == self._media_session
                   and status.player_state in ("PLAYING", "PAUSED", "BUFFERING"))
+        position = status.adjusted_current_time
+        duration = status.duration
+        position = max(0, int(position)) if isinstance(position, (int, float)) and math.isfinite(position) else 0
+        duration = duration if isinstance(duration, (int, float)) and math.isfinite(duration) and duration > 0 else None
         return {"active": active, "state": status.player_state,
+                "position": position, "duration": duration,
                 "play": active and status.player_state == "PAUSED",
                 "pause": active and status.player_state != "PAUSED" and bool(status.supports_pause),
                 "seek": active and bool(status.supports_seek) and status.stream_type != "LIVE"}
@@ -230,9 +235,9 @@ class CastSession(Session, MediaStatusListener):
 
     def control(self, action, seconds=None):
         available = self.playback_status()
-        if action not in ("play", "pause", "seek"):
+        if action not in ("play", "pause", "seek", "seek-to"):
             raise RuntimeError("Unknown playback command")
-        if not available[action]:
+        if not available["seek" if action == "seek-to" else action]:
             raise RuntimeError(f"{action.capitalize()} is unavailable for the current media")
         mc = self.cast.media_controller
         if action == "play":
@@ -246,7 +251,7 @@ class CastSession(Session, MediaStatusListener):
             position = status.adjusted_current_time
             if position is None or not math.isfinite(position):
                 raise RuntimeError("Receiver has not reported a playback position yet")
-            target = max(0, position + seconds)
+            target = max(0, seconds if action == "seek-to" else position + seconds)
             if status.duration and math.isfinite(status.duration):
                 target = min(target, max(0, status.duration - 0.1))
             paused = status.player_state == "PAUSED"

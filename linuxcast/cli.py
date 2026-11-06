@@ -311,8 +311,8 @@ def main(argv=None):
 
     ctl = sub.add_parser("control", help="control this machine's Chromecast file playback")
     ctl.set_defaults(fn=cmd_control)
-    ctl.add_argument("action", choices=["play", "pause", "seek", "next"])
-    ctl.add_argument("seconds", nargs="?", type=float, help="relative seek offset, e.g. -10 or 30")
+    ctl.add_argument("action", choices=["play", "pause", "seek", "seek-to", "next"])
+    ctl.add_argument("seconds", nargs="?", type=float, help="seek offset, or absolute position for seek-to, in seconds")
     ctl.add_argument("--session", help=argparse.SUPPRESS)
     ctl.add_argument("--notify", action="store_true")
 

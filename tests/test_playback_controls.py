@@ -43,6 +43,19 @@ class PlaybackTests(unittest.TestCase):
         mc.seek.assert_called_with(99.9)
         mc.pause.assert_called_once_with()
 
+    def test_absolute_seek_and_timeline_snapshot(self):
+        active, mc, status = running_cast()
+        self.assertEqual(active.playback_status()["position"], 40)
+        self.assertEqual(active.playback_status()["duration"], 100)
+        status.player_state = "PAUSED"
+        active.control("seek-to", 75)
+        mc.seek.assert_called_once_with(75)
+        mc.pause.assert_called_once_with()
+        status.duration = float("nan")
+        status.adjusted_current_time = float("nan")
+        self.assertIsNone(active.playback_status()["duration"])
+        self.assertEqual(active.playback_status()["position"], 0)
+
     def test_unsupported_live_and_invalid_seeks(self):
         active, mc, status = running_cast()
         for offset in [None, "10", True, float("nan"), float("inf")]:

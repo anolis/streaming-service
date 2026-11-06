@@ -312,3 +312,19 @@ and desktop menu rendering still need hardware/manual confirmation.
 
 The installed CLI is editable and both desktop integrations link to this checkout.
 Reloaded the Cinnamon applet; the desktop log confirms it loaded successfully.
+
+### Seek-bar follow-up
+
+User clarified seeking must use a bar instead of buttons. Replaced seek menu
+buttons with an inline Cinnamon PopupSliderMenuItem and elapsed/total time.
+The AppIndicator tray opens a Gtk.Scale timeline via Seek… because indicator
+menus do not export arbitrary slider widgets. Drag release sends `seek-to` with
+an absolute timestamp; keyboard/wheel changes debounce. Progress updates change
+the slider/label in place, excluded from menu rebuild keys and held during edits.
+Unknown-duration media disables the timeline. Session snapshots now include
+finite position/duration, with whole-second positions avoiding excessive writes.
+
+Validation: 53 Python tests ran successfully (one existing skip); Node menu-event
+test covers progress without rebuild, drag release, wheel debounce and unknown
+duration. Real GTK dialog smoke test verifies initial position and absolute-seek
+callback using a mock state; screenshot inspected. No hardware cast changed.

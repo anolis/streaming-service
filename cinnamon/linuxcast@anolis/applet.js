@@ -71,6 +71,8 @@ class CastApplet extends Applet.IconApplet {
     }
 
     on_applet_removed_from_panel() {
+        if (this._seekTimer)
+            GLib.source_remove(this._seekTimer);
         if (this._pollId)
             GLib.source_remove(this._pollId);
         Main.keybindingManager.removeHotKey(this._hotkeyName());
@@ -322,10 +324,23 @@ class CastApplet extends Applet.IconApplet {
 
     _syncStatus() {
         let s = this.state;
-        let key = s ? JSON.stringify([s.status, s.device.name, s.what, s.control, s.playback]) : "";
+        let p = s && s.playback;
+        let key = s ? JSON.stringify([s.status, s.device.name, s.what, s.control,
+                                     p && [p.state, p.play, p.pause, p.seek, p.next]]) : "";
+        this._syncTimeline();
+        if (this._seekDragging)
+            return;
         if (key === this._statusKey)
             return;
         this._statusKey = key;
+        if (this._seekTimer) {
+            GLib.source_remove(this._seekTimer);
+            this._seekTimer = 0;
+        }
+        this._seekSlider = null;
+        this._seekLabel = null;
+        this._seekTarget = null;
+        this._seekPendingUntil = 0;
         this._statusSection.removeAll();
         if (!s)
             return;
@@ -334,17 +349,70 @@ class CastApplet extends Applet.IconApplet {
         this._statusSection.addMenuItem(new PopupMenu.PopupMenuItem(s.what, { reactive: false }));
         if (s.playback) {
             for (let [label, action, seconds] of [["Play", "play", null], ["Pause", "pause", null],
-                                                 ["Back 10 seconds", "seek", -10],
-                                                 ["Forward 30 seconds", "seek", 30],
                                                  ["Next file", "next", null]]) {
                 let item = new PopupMenu.PopupMenuItem(label);
                 item.setSensitive(!!s.playback[action]);
                 item.connect("activate", () => this._playback(action, seconds, s.control));
                 this._statusSection.addMenuItem(item);
             }
+            this._seekLabel = this._header("");
+            this._statusSection.addMenuItem(this._seekLabel);
+            this._seekSlider = new PopupMenu.PopupSliderMenuItem(0);
+            this._seekSlider.actor.accessible_name = "Playback position";
+            this._statusSection.addMenuItem(this._seekSlider);
+            let commit = () => {
+                if (this._seekTimer) {
+                    GLib.source_remove(this._seekTimer);
+                    this._seekTimer = 0;
+                }
+                if (this._seekTarget !== null && this._seekTarget !== undefined) {
+                    this._seekPendingUntil = GLib.get_monotonic_time() + 2000000;
+                    this._playback("seek-to", this._seekTarget, s.control);
+                    this._seekTarget = null;
+                }
+            };
+            this._seekSlider.connect("drag-begin", () => { this._seekDragging = true; });
+            this._seekSlider.connect("value-changed", (slider, value) => {
+                let playback = this.state && this.state.playback;
+                if (!playback || !playback.duration || this.state.control !== s.control)
+                    return;
+                this._seekTarget = value * playback.duration;
+                this._seekLabel.label.set_text(`${this._timeLabel(this._seekTarget)} / ${this._timeLabel(playback.duration)}`);
+                if (!this._seekDragging) {
+                    if (this._seekTimer)
+                        GLib.source_remove(this._seekTimer);
+                    this._seekTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 300, () => {
+                        this._seekTimer = 0;
+                        commit();
+                        return GLib.SOURCE_REMOVE;
+                    });
+                }
+            });
+            this._seekSlider.connect("drag-end", () => { this._seekDragging = false; commit(); this._syncStatus(); });
+            this._syncTimeline();
         }
         this._statusSection.addAction("Stop casting", () => this._stop());
         this._statusSection.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+    }
+
+    _timeLabel(seconds) {
+        seconds = Math.max(0, Math.floor(seconds || 0));
+        let hours = Math.floor(seconds / 3600);
+        let minutes = Math.floor(seconds / 60) % 60;
+        let rest = String(seconds % 60).padStart(2, "0");
+        return hours ? `${hours}:${String(minutes).padStart(2, "0")}:${rest}` : `${minutes}:${rest}`;
+    }
+
+    _syncTimeline() {
+        if (!this._seekSlider || !this.state || !this.state.playback)
+            return;
+        let p = this.state.playback;
+        this._seekSlider.setSensitive(!!(p.seek && p.duration));
+        if (this._seekDragging || this._seekTimer || GLib.get_monotonic_time() < (this._seekPendingUntil || 0))
+            return;
+        this._seekSlider.setValue(p.duration ? p.position / p.duration : 0);
+        this._seekLabel.label.set_text(p.duration ?
+            `${this._timeLabel(p.position)} / ${this._timeLabel(p.duration)}` : "Duration unavailable — cannot seek");
     }
 
     _syncDevices() {
