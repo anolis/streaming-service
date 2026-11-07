@@ -64,7 +64,7 @@ class ChromecastBackend(Backend):
             raise RuntimeError(f"{device.name} ({device.host}) did not respond")
         return cast
 
-    def _start(self, device, url, content_type, title, live, cleanup, duration=None) -> "CastSession":
+    def _start(self, device, url, content_type, title, live, cleanup, duration=None, autoplay=True) -> "CastSession":
         cast = self._connect(device)
         mc = cast.media_controller
         session = CastSession(cast, cleanup)
@@ -79,9 +79,22 @@ class ChromecastBackend(Backend):
             media_info = (media_info or {}) | {"duration": duration}
         try:
             mc.play_media(url, content_type, title=title,
-                          stream_type="LIVE" if live else "BUFFERED", media_info=media_info)
-            mc.block_until_active(timeout=15)
-            session.bind(mc.status)
+                          stream_type="LIVE" if live else "BUFFERED", media_info=media_info,
+                          current_time=None if live else 0, autoplay=autoplay)
+            # An already-playing receiver makes block_until_active return for
+            # the OLD media. Wait for our unique URL before binding ownership.
+            deadline = time.monotonic() + 20
+            while True:
+                status = mc.status
+                if (status.content_id == url and status.media_session_id is not None
+                        and status.player_state in ("PLAYING", "PAUSED", "BUFFERING")):
+                    session.bind(status)
+                    break
+                if session.last_error:
+                    raise RuntimeError(session.last_error)
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("Receiver did not load the requested media")
+                time.sleep(0.1)
         except BaseException:
             # Stopped mid-connect: don't leave the receiver on a dead stream.
             cast.quit_app()
@@ -114,6 +127,12 @@ class ChromecastBackend(Backend):
         return s
 
     def play(self, device, source):
+        active = self._play(device, source)
+        if active._transcoded:
+            return TranscodedSession(active, lambda offset, paused: self._play(device, source, offset, paused))
+        return active
+
+    def _play(self, device, source, offset=0, paused=False):
         if source.startswith(("http://", "https://")):
             ctype = mimetypes.guess_type(source.split("?")[0])[0] or "video/mp4"
             return self._start(device, source, ctype, source, live=False, cleanup=lambda: None)
@@ -133,18 +152,23 @@ class ChromecastBackend(Backend):
             duration = capture.media_duration(info)
             if capture.needs_transcode(str(path), info=info):
                 print(f"{path.name}: format not native to Chromecast, transcoding on the fly")
-                hls = capture.HlsProcess(capture.transcode_command(str(path), workdir), workdir)
+                server.set_playlist_header("#EXT-X-START:TIME-OFFSET=0,PRECISE=YES")
+                hls = capture.HlsProcess(capture.transcode_command(str(path), workdir, start_seconds=offset), workdir)
                 resources.callback(hls.stop)
                 hls.wait_ready()
                 url, ctype = server.url(capture.PLAYLIST), "application/x-mpegURL"
             else:
                 url = server.add_file(path)
                 ctype = mimetypes.guess_type(path.name)[0] or "video/mp4"
-            s = self._start(device, url, ctype, path.name, live=False, cleanup=cleanup, duration=duration)
+            s = self._start(device, url, ctype, path.name, live=False, cleanup=cleanup,
+                            duration=max(0, duration - offset) if duration else None, autoplay=not paused)
         except BaseException:
             cleanup()
             raise
         s.child = hls.proc if hls else None
+        s._source_duration = duration
+        s._source_offset = offset
+        s._transcoded = hls is not None
         if hls:
             s._seek_limit = lambda: capture.live_edge(workdir)
         return s
@@ -165,6 +189,8 @@ class CastSession(Session, MediaStatusListener):
         self._done = threading.Event()
         self._skip = threading.Event()
         self._source_duration = None
+        self._source_offset = 0
+        self._transcoded = False
         self._seek_limit = None
         self.child = None  # ffmpeg process, if any
         self.last_error = None
@@ -229,9 +255,11 @@ class CastSession(Session, MediaStatusListener):
                   and status.player_state in ("PLAYING", "PAUSED", "BUFFERING"))
         position = status.adjusted_current_time
         duration = self._source_duration or status.duration
-        position = max(0, int(position)) if isinstance(position, (int, float)) and math.isfinite(position) else 0
+        position = max(0, int(position + self._source_offset)) if isinstance(position, (int, float)) and math.isfinite(position) else int(self._source_offset)
         duration = duration if isinstance(duration, (int, float)) and math.isfinite(duration) and duration > 0 else None
         seek_end = self._seek_limit() if self._seek_limit else duration
+        if self._seek_limit and seek_end is not None:
+            seek_end += self._source_offset
         if seek_end is not None:
             seek_end = min(seek_end, duration) if duration else seek_end
             seek_end = max(0, int(seek_end))
@@ -298,3 +326,89 @@ class CastSession(Session, MediaStatusListener):
                 self.cast.disconnect(timeout=3)
             finally:
                 self._cleanup()
+
+
+class TranscodedSession(Session):
+    """Seek a transcoded file at its source, bypassing unreliable EVENT-HLS SEEK.
+
+    Each replacement has independent URLs/timestamps and its own cleanup. The
+    wait loop follows replacements instead of treating their LOAD as a takeover.
+    """
+    def __init__(self, active, restart):
+        self._active = active
+        self._restart = restart
+        self._lock = threading.RLock()
+        self._closed = False
+
+    @property
+    def last_error(self):
+        return self._active.last_error
+
+    @property
+    def end_note(self):
+        return self._active.end_note
+
+    @property
+    def cast(self):
+        return self._active.cast
+
+    @property
+    def _skip(self):
+        return self._active._skip
+
+    def playback_status(self):
+        with self._lock:
+            result = self._active.playback_status()
+            # Source-based seeking can prepare any position, even beyond the
+            # segments already encoded or the receiver's advertised seek range.
+            result["seek"] = result["active"] and bool(result["duration"])
+            result["seek_end"] = result["duration"]
+            return result
+
+    def control(self, action, seconds=None):
+        with self._lock:
+            if self._closed:
+                raise RuntimeError("The cast has ended")
+            if action not in ("seek", "seek-to"):
+                return self._active.control(action, seconds)
+            state = self.playback_status()
+            if not state["seek"]:
+                raise RuntimeError("Seeking is unavailable for this media")
+            if type(seconds) not in (int, float) or not math.isfinite(seconds):
+                raise RuntimeError("Seek position must be a finite number of seconds")
+            target = seconds if action == "seek-to" else state["position"] + seconds
+            target = min(max(0, target), max(0, state["duration"] - 0.1))
+            log(f"source seek requested: {target:.1f}s (from {state['position']}s)")
+            previous = self._active
+            replacement = self._restart(target, state["state"] == "PAUSED")
+            self._active = replacement
+            # LOAD ends the old receiver media session. Wake its wait loop even
+            # if its socket hasn't received that status yet, without quitting
+            # the app now playing the replacement stream.
+            previous._done.set()
+            try:
+                previous.close()
+            except Exception as error:
+                log(f"previous stream cleanup: {error}")
+            log(f"source seek loaded: {target:.1f}s")
+
+    def skip(self):
+        with self._lock:
+            self._active.skip()
+
+    def wait(self):
+        while True:
+            with self._lock:
+                if self._closed:
+                    return
+                active = self._active
+            active.wait()
+            with self._lock:
+                if active is self._active:
+                    return
+
+    def close(self):
+        with self._lock:
+            if not self._closed:
+                self._closed = True
+                self._active.close()

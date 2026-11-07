@@ -183,13 +183,14 @@ Cinnamon displays the timeline directly in the menu. On AppIndicator desktops,
 choose **Seek…** to open the timeline window. It shows elapsed/total time and
 seeks on release; keyboard and scroll-wheel adjustments are also supported.
 A known duration is required to use the timeline. Local files use ffprobe metadata
-when the receiver omits it. For files being transcoded, a mark and “ready through”
-label show how far seeking is available; later sections become available as
-encoding runs ahead. Seeking past that point reports an error without reloading
-the media.
+when the receiver omits it. Transcoded files seek by starting a replacement
+stream at the selected source timestamp, with a brief buffering delay. This
+works beyond the footage already encoded and retains the full-file timeline.
+Native files continue to use receiver seeking.
 Unavailable receiver actions are disabled. Seeking while paused keeps playback
-paused. These controls operate on the existing media session without reloading
-or restarting the file; live screen mirroring is unchanged.
+paused. Play/Pause and native-file seeking use the existing media session. Transcoded
+file seeking replaces the stream at the requested position; live screen
+mirroring is unchanged.
 
 Select multiple files in **Cast a media file…** to play them in selection order.
 **Next file** skips to the next selected file, and normal completion advances

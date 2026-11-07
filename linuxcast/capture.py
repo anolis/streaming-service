@@ -165,9 +165,12 @@ def screen_ts_command(opts: CaptureOptions) -> list[str]:
         "-muxdelay", "0", "-flush_packets", "1", "pipe:1"])
 
 
-def transcode_command(src: str, outdir: Path, encoder: str = "auto") -> list[str]:
+def transcode_command(src: str, outdir: Path, encoder: str = "auto", start_seconds: float = 0) -> list[str]:
     venc = video_encoder_args(encoder, 30, "8M")
-    cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-i", src,
+    if not math.isfinite(start_seconds) or start_seconds < 0:
+        raise ValueError("Invalid transcode start position")
+    cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin",
+           "-ss", str(start_seconds), "-i", src,
            "-map", "0:v:0", "-map", "0:a:0?",
            "-vf", _scale_filter("h264_vaapi" in venc), *venc,
            "-c:a", "aac", "-b:a", "192k", "-ac", "2", "-ar", "48000"]

@@ -350,3 +350,36 @@ partial duration, probe validation, load metadata, transcoding ahead and prepare
 seek bounds. Real ffprobe on a generated MKV returned its expected duration.
 Cinnamon timeline test verifies the prepared-position mark and label. No physical
 receiver command or playback restart was issued during this fix.
+
+### Receiver seeks snap back during EVENT-HLS playback — 2026-11-06
+
+User reports seeks reload the current position. Duration/prepared-range fixes
+were insufficient for this receiver. Transcoded local files now use a
+TranscodedSession wrapper: seek launches ffmpeg with input -ss at the requested
+source timestamp into a new workdir/server URL, then loads that replacement
+from zero (including EXT-X-START=0). Source offsets map receiver position back
+onto the full-file timeline. Any source position can be prepared; the previous
+“ready through” restriction no longer applies to this path. Pause is retained
+through autoplay=False. Native files still use receiver SEEK. Expect a brief
+buffering delay for transcoded seeks.
+
+Each replacement owns its encoder/server resources; the prior stream is
+disconnected/cleaned without quitting the new receiver app. A lock ensures the
+wait loop follows the replacement instead of treating its LOAD as a takeover.
+Preparation failure leaves the prior session owned. Control socket response
+timeout increased to 60 seconds to allow preparation and receiver load.
+
+Also fixed _start binding to old media: pychromecast.block_until_active can
+return immediately for a preexisting session. Now wait for the requested unique
+content URL and media-session ID before binding. Seek requested/loaded positions
+are logged for diagnosis.
+
+Validation: full suite passed 62 tests (one existing skip) before adding the
+load-ownership regression; all five source-seek tests subsequently passed. Tests
+cover timestamp forwarding, pause, source-offset status, cleanup, following a
+replacement across takeover callbacks, failed preparation and binding new URLs.
+`PYTHONPATH=. python tools/check-transcode-seek.py` generated red-then-blue MKV
+footage, sought into the blue section, decoded the resulting HLS first frame
+as blue, and confirmed only 1.4 seconds of remaining content. Cinnamon menu test
+also passes. No receiver mutation was performed; the live cast ended before a
+read-only status check could run. Hardware behavior still awaits confirmation.

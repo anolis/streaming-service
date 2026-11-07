@@ -99,7 +99,7 @@ def send(action, seconds=None, expected=None):
         raise RuntimeError("The active cast changed. Reopen the menu and try again.")
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-            client.settimeout(25)
+            client.settimeout(60)
             client.connect(path)
             client.sendall(json.dumps({"action": action, "seconds": seconds}).encode() + b"\n")
             data = bytearray()

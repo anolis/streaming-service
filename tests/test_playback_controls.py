@@ -4,13 +4,15 @@ import io
 import json
 from pathlib import Path
 import tempfile
+import threading
+import time
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from linuxcast import cli, control, session, capture
 from linuxcast.base import Device
-from linuxcast.backends.chromecast import CastSession, ChromecastBackend
+from linuxcast.backends.chromecast import CastSession, ChromecastBackend, TranscodedSession
 
 
 def running_cast():
@@ -95,6 +97,7 @@ class PlaybackTests(unittest.TestCase):
     def test_duration_is_sent_in_receiver_load(self):
         active, mc, _ = running_cast()
         backend = ChromecastBackend()
+        mc.status.content_id = "http://example/stream.m3u8"
         with patch.object(backend, "_connect", return_value=active.cast):
             started = backend._start(None, "http://example/stream.m3u8", "application/x-mpegURL",
                                      "file", False, lambda: None, duration=1800)
@@ -131,6 +134,80 @@ class PlaybackTests(unittest.TestCase):
         active.close()
         active.cast.quit_app.assert_called_once()
         active._cleanup.assert_called_once()
+
+
+class SourceSeekTests(unittest.TestCase):
+    def test_load_waits_for_new_url_instead_of_existing_active_media(self):
+        first, mc, status = running_cast()
+        status.content_id = "http://old/stream"
+        backend = ChromecastBackend()
+        def loaded(_seconds):
+            status.content_id = "http://new/stream"
+            status.media_session_id = 8
+        with patch.object(backend, "_connect", return_value=first.cast), \
+             patch("linuxcast.backends.chromecast.time.sleep", side_effect=loaded) as wait:
+            result = backend._start(None, "http://new/stream", "video/mp4", "file", False, lambda: None)
+        wait.assert_called_once()
+        self.assertEqual(result._media_session, 8)
+
+
+    def test_source_seek_restarts_at_target_and_preserves_pause(self):
+        first, old_mc, status = running_cast()
+        status.player_state = "PAUSED"
+        first._source_duration = 1800
+        first._seek_limit = lambda: 50
+        second, _, second_status = running_cast()
+        second._source_duration = 1800
+        second._source_offset = 900
+        second_status.adjusted_current_time = 2
+        restart = Mock(return_value=second)
+        active = TranscodedSession(first, restart)
+        active.control("seek-to", 900)
+        restart.assert_called_once_with(900, True)
+        old_mc.seek.assert_not_called()
+        first.cast.quit_app.assert_not_called()
+        first._cleanup.assert_called_once()
+        self.assertEqual(active.playback_status()["position"], 902)
+        self.assertEqual(active.playback_status()["duration"], 1800)
+        self.assertEqual(active.playback_status()["seek_end"], 1800)
+        active.close()
+        second._cleanup.assert_called_once()
+
+    def test_wait_follows_replacement_instead_of_ending_cast(self):
+        first, _, _ = running_cast()
+        second, _, _ = running_cast()
+        entered = threading.Event()
+        def restart(offset, paused):
+            first._done.set()  # receiver reports takeover during replacement LOAD
+            entered.set()
+            time.sleep(.05)
+            return second
+        active = TranscodedSession(first, restart)
+        waiter = threading.Thread(target=active.wait)
+        waiter.start()
+        active.control("seek-to", 70)
+        self.assertTrue(entered.is_set())
+        self.assertTrue(waiter.is_alive())
+        second._done.set()
+        waiter.join(2)
+        self.assertFalse(waiter.is_alive())
+        active.close()
+
+    def test_failed_preparation_keeps_previous_stream(self):
+        first, _, _ = running_cast()
+        active = TranscodedSession(first, Mock(side_effect=RuntimeError("encoder failed")))
+        with self.assertRaisesRegex(RuntimeError, "encoder failed"):
+            active.control("seek-to", 70)
+        first._cleanup.assert_not_called()
+        self.assertEqual(active.playback_status()["position"], 40)
+        active.close()
+
+    def test_input_seek_precedes_file_and_rebases_output(self):
+        with patch.object(capture, "video_encoder_args", return_value=["-c:v", "libx264"]):
+            command = capture.transcode_command("movie.mkv", Path("/tmp/out"), start_seconds=900)
+        self.assertLess(command.index("-ss"), command.index("-i"))
+        self.assertEqual(command[command.index("-ss") + 1], "900")
+        self.assertNotIn("-copyts", command)
 
 
 class CommandSocketTests(unittest.TestCase):
